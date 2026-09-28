@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://dpa00m7nhpti1"]
+
+[ext_resource type="Script" uid="uid://by4shietak58i" path="res://tests/mvp_smoke_test.gd" id="1_test"]
+
+[node name="MVPSmokeTest" type="Node" unique_id=969287048]
+script = ExtResource("1_test")
