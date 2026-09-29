@@ -40,6 +40,13 @@ func _build_demo_interactions() -> void:
 		_container_point("neighbour_pantry", "Neighbour's pantry", Vector2(3.5, 10.5), 0, beans, water),
 	]
 	(points.back()["container"] as ContainerData).claimed_by = "neighbour"
+	var bandage := ItemDefinition.new("test_bandage", "Test bandage", Vector2i(1, 1), 0.1, ["medical"])
+	var tool_case := ItemDefinition.new("test_tool_case", "Test tool case", Vector2i(2, 2), 2.0, ["tool"])
+	var ration := ItemDefinition.new("test_ration", "Test ration", Vector2i(2, 1), 0.5, ["food"])
+	points.insert(points.size() - 1, {"id": "test_supply_cache", "kind": "container", "label": "Test supply cache",
+		"position": Vector2(4.5, 7.0), "floor": 0, "radius": 0.9,
+		"container": ContainerData.new("test_supply_cache", "Test supply cache", [
+			ItemStack.new(bandage, 3), ItemStack.new(tool_case), ItemStack.new(ration, 2)])})
 
 
 func _container_point(id: String, label: String, pos: Vector2, floor: int,
@@ -78,6 +85,11 @@ func request_sorting() -> void:
 
 
 func _reachable(point: Dictionary) -> bool:
+	var target_tile := world_map.get_tile(point["position"], int(point["floor"]))
+	var player_tile := world_map.get_tile(player.logical_position, player.floor_level)
+	if target_tile != null and not target_tile.room_id.is_empty():
+		if player_tile == null or player_tile.room_id != target_tile.room_id:
+			return false
 	return (player.stair_id.is_empty()
 		and int(point["floor"]) == player.floor_level
 		and player.logical_position.distance_to(point["position"]) <= float(point["radius"])

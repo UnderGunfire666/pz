@@ -41,7 +41,6 @@ func _ready() -> void:
 
 	actor_layer = Node2D.new()
 	actor_layer.name = "Actors"
-	actor_layer.y_sort_enabled = true
 	actor_layer.visible = false
 	add_child(actor_layer)
 
@@ -277,28 +276,16 @@ func _on_speed_changed(mode_name: String, _simulation_scale: float) -> void:
 
 func objective_text() -> String:
 	if not milestones["safehouse"]:
-		return "1/6  Enter the safehouse (purple marker)."
+		return "1/5  Enter the safehouse through its ground-floor doorway."
 	if not milestones["food"]:
-		return "2/6  Reach the grocery and search the blue shelf with [E]."
-	if not milestones["injury"]:
-		return "3/6  Optional: observe a minor wound; beware road debris."
+		return "2/5  Find food: [E] at a blue container; more supplies are upstairs."
 	if not milestones["avoid"]:
-		return "4/6  Spot a zombie, then create distance without getting trapped."
+		return "3/5  Spot a zombie, then create distance; they can follow stairs."
 	if not milestones["rest"]:
-		return "5/6  Return to the safehouse bed and rest with [E]."
+		return "4/5  Return to a safehouse bed and rest with [E]."
 	if not milestones["explore"]:
-		return "6/6  Leave home and continue exploring."
+		return "5/5  Leave home and continue exploring."
 	return "Loop complete. Keep exploring, managing sound, supplies, and time."
-
-
-func milestone_summary() -> String:
-	var labels := ["Safehouse", "Food", "Light wound", "Avoided", "Rested", "Explore"]
-	var keys := ["safehouse", "food", "injury", "avoid", "rest", "explore"]
-	var output: Array[String] = []
-	for index in range(keys.size()):
-		var marker := "✓" if milestones[keys[index]] else "·"
-		output.append("%s %s" % [marker, labels[index]])
-	return "  ".join(output)
 
 
 func local_zombie_count(radius: float = 4.0) -> int:

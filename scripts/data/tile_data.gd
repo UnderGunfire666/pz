@@ -5,7 +5,6 @@ extends RefCounted
 ## from gameplay data so this can later be backed by a TileMap/terrain importer.
 var kind: String
 var walkable: bool
-var blocks_sight: bool
 var zombie_pressure: float
 var building_id: String
 var room_id: String
@@ -16,7 +15,6 @@ var floor_level: int
 func _init(
 		p_kind: String = "grass",
 		p_walkable: bool = true,
-		p_blocks_sight: bool = false,
 		p_zombie_pressure: float = 0.1,
 		p_building_id: String = "",
 		p_room_id: String = "",
@@ -25,7 +23,6 @@ func _init(
 	) -> void:
 	kind = p_kind
 	walkable = p_walkable
-	blocks_sight = p_blocks_sight
 	zombie_pressure = p_zombie_pressure
 	building_id = p_building_id
 	room_id = p_room_id

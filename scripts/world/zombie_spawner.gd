@@ -32,7 +32,7 @@ func seed_demo_population() -> void:
 	# pressure logic in data. The rural road has one; the grocery has a cluster.
 	for seed in [
 		{"position": Vector2(8.4, 9.6), "floor": 0},
-		{"position": Vector2(11.7, 6.6), "floor": 0},
+		{"position": Vector2(12.1, 6.6), "floor": 0},
 		{"position": Vector2(14.7, 5.4), "floor": 0},
 		{"position": Vector2(15.3, 6.7), "floor": 0},
 		{"position": Vector2(12.2, 3.6), "floor": 0},
@@ -60,7 +60,7 @@ func _process(delta: float) -> void:
 
 
 func _spawn(world_position: Vector2, floor: int = 0) -> ZombieActor:
-	if not world_map.is_walkable(world_position, floor):
+	if not world_map.can_stand(world_position, floor):
 		return null
 	var zombie := ZombieActor.new()
 	actor_layer.add_child(zombie)
@@ -82,7 +82,7 @@ func clear_population() -> void:
 
 
 func _can_respawn_at(world_position: Vector2, floor: int) -> bool:
-	if not world_map.is_walkable(world_position, floor):
+	if not world_map.can_stand(world_position, floor):
 		return false
 	# Avoid spawning below the player too: stacked rooms should stay predictable.
 	if world_position.distance_to(player.logical_position) < 6.0:

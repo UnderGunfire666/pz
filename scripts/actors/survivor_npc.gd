@@ -22,9 +22,7 @@ var food_position := Vector2(3.5, 10.5)
 var known_container_ids: Array[String] = []
 var _resource_point: Dictionary = {}
 var _search_progress := 0.0
-var _path: Array[Dictionary] = []
-var _path_index := 0
-var _repath_left := 0.0
+var _navigation := LocalNavigation.new()
 
 
 func setup(p_world_map: WorldMap, start_position: Vector2) -> void:
@@ -191,9 +189,7 @@ func _at_target() -> bool:
 
 
 func reset_navigation() -> void:
-	_path.clear()
-	_path_index = 0
-	_repath_left = 0.0
+	_navigation.reset()
 
 
 func cancel_current_task() -> void:
@@ -204,23 +200,11 @@ func cancel_current_task() -> void:
 
 
 func _move_toward_target(scaled_delta: float) -> void:
-	_repath_left -= scaled_delta
-	if _repath_left <= 0.0 and stair_id.is_empty():
-		_path = world_map.find_path(logical_position, floor_level, target_position, target_floor)
-		_path_index = 0
-		_repath_left = 0.8
-	while _path_index < _path.size():
-		var waypoint: Dictionary = _path[_path_index]
-		var waypoint_position: Vector2 = waypoint["position"]
-		if floor_level == int(waypoint["floor"]) and logical_position.distance_to(waypoint_position) < 0.12 and stair_id.is_empty():
-			_path_index += 1
-			continue
-		var movement := logical_position.direction_to(waypoint_position) * minf(MOVE_SPEED * scaled_delta, logical_position.distance_to(waypoint_position))
-		var result := world_map.move_actor(logical_position, floor_level, movement, stair_id)
-		logical_position = result["position"]
-		floor_level = int(result["floor"])
-		stair_id = String(result["stair_id"])
-		return
+	var result := _navigation.advance(world_map, logical_position, floor_level, stair_id,
+		target_position, target_floor, MOVE_SPEED, scaled_delta)
+	logical_position = result["position"]
+	floor_level = int(result["floor"])
+	stair_id = String(result["stair_id"])
 
 
 func _nearest_zombie() -> ZombieActor:

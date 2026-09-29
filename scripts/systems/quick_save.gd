@@ -209,7 +209,11 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 				point["triggered"] = saved.get("triggered", false)
 	game.zombie_spawner.clear_population()
 	for entry in data["zombies"]:
-		var zombie := game.zombie_spawner._spawn(entry["position"], entry["floor"])
+		var spawn_pos: Vector2 = entry["position"]
+		if not String(entry["stair"]).is_empty():
+			var link: StairLink = game.world_map.stairs[entry["stair"]]
+			spawn_pos = link.start if int(entry["floor"]) == link.from_floor else link.end
+		var zombie := game.zombie_spawner._spawn(spawn_pos, entry["floor"])
 		if zombie == null:
 			continue
 		_restore_actor(zombie, entry)
@@ -223,9 +227,9 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	_restore_survival(game.npc.survival, data["npc"]["survival"])
 	game.npc.brain.load_save_data(data["npc"]["brain"])
 	game.npc.known_container_ids.assign(data["npc"]["known_containers"])
-	game.npc.reset_navigation()
+	game.npc.cancel_current_task()
 	game.visibility.seen_tiles = data["seen"].duplicate()
-	game.visibility._last_refresh_msec = -1000000
+	game.visibility.invalidate()
 	game.visibility.refresh(game.player.logical_position, game.player.facing_direction, false, game.player.floor_level)
 	game.milestones = data["milestones"].duplicate()
 	game.rest_origin = data["rest_origin"]
@@ -251,7 +255,7 @@ static func _valid_actor(data: Variant, map: WorldMap) -> bool:
 	if not pos.is_finite():
 		return false
 	if data["stair"] == "":
-		return map.is_walkable(pos, data["floor"])
+		return map.can_stand(pos, data["floor"])
 	if not map.stairs.has(data["stair"]):
 		return false
 	var link = map.stairs[data["stair"]]

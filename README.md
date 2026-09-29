@@ -1,50 +1,54 @@
-# Afterlight: Orangeville MVP
+# Afterlight：Orangeville 多楼层 MVP
 
-This repository contains a runnable Godot 4.7.2 3D greybox for a small, single-player zombie-survival MVP. It is deliberately a first playable build, not a full Project Zomboid clone: the goal is to prove the survival loop, visibility pressure, and one autonomous survivor before content production begins.
+Godot 4.7.2 单机 3D 灰盒生存原型。两栋两层住宅、一栋三层商店；玩家、僵尸和 NPC 共用真实分层通行与楼梯路径。无需外部美术资源。
 
-Run the project from Godot, or use:
+用 Godot 打开本目录，按 F6/F5 运行场景/项目，或在此目录执行：
 
 ```bash
 flatpak run org.godotengine.Godot --path .
 ```
 
-The prototype has no external art dependency. Its 3D terrain, multi-storey walls, actors, lighting, and camera are built from procedural meshes; the existing logical grid continues to drive survival and AI simulation.
+## 操作
 
-## Demo route
-
-1. Move north into the safehouse and approach the purple bed marker.
-2. Travel east toward the grocery. The orange marker on the road is broken glass and deliberately gives a light wound.
-3. Enter the grocery from its south door; approach the blue shelf and press `E`. Searching takes game time.
-4. Watch the field of view and make space when a zombie is spotted. Zombies pursue and attack at close range; directional attacks show their remaining health and create noise.
-5. Return to the safehouse bed, press `E`, then use `2` to fast-forward a rest.
-6. Leave the house again to complete the demonstrable loop.
-
-## Controls
-
-| Input | Action |
+| 输入 | 操作 |
 | --- | --- |
-| `WASD` | Move in screen-space up / down / left / right |
-| `Shift` | Sprint while stamina permits |
-| Hold right mouse | Aim / face the mouse without changing FOV |
-| Hold middle mouse and drag horizontally | Rotate the 3D camera around the player; pitch stays fixed |
-| Walk along the visible ramp | Move between floors inside multi-storey buildings |
-| Left mouse | Directional melee attack; creates a noise event |
-| `E` | Search a container or rest in the safehouse |
-| `F` / `V` | Eat food / drink water from the pack |
-| `R` | Sort inventory; this takes game time |
-| `Space` | Pause world simulation |
-| `1` / `2` | Normal speed / 3× fast-forward |
-| Mouse wheel / HUD `+` and `-` | Zoom the world camera |
-| HUD time buttons | Pause / normal / fast-forward |
+| WASD / Shift | 按画面方向移动 / 冲刺 |
+| 右键按住 / 左键 | 面向鼠标瞄准 / 定向近战 |
+| 中键水平拖动 / 滚轮 | 旋转相机 / 缩放 |
+| 沿楼梯方向走入端部平台 | 上下楼；途中可停下或反向 |
+| E | 搜索、收取已知物资、休息；动作中再次按 E 取消 |
+| F / V / R | 吃 / 喝 / 整理背包 |
+| 移动、瞄准、攻击、Esc、受伤 | 中断动作；搜索进度保留 |
+| Space / 1 / 2 | 暂停 / 正常 / 3 倍速；HUD 也有按钮 |
+| Pack / health、Help 按钮 | 展开背包健康信息 / 操作帮助 |
+| 游戏窗口内 F5 / F9 | 快速保存 / 读档后暂停 |
+| 死亡后 Enter | 新开一局 |
 
-Walls are thin face segments: actors can step onto the wall tile, but cannot cross the wall surface. Walls on the active floor are never hidden based on camera angle. Vision includes a short omnidirectional radius around the player, with the longer view still limited by facing and wall occlusion; the 3D fog boundary is a smooth, consistently shaded polygon and vision results are cached between changes. Interrupting a container search retains its completed game-time progress for the next attempt. Multi-storey buildings have walkable ramps; the player moves between floors physically and geometry on other floors is hidden. The 3D presentation and camera sit on top of the existing grid-based survival simulation.
+## 试玩路线
 
-`docs/MVP_BLUEPRINT.md` documents the architecture, solo-dev roadmap, boundaries, and launch acceptance criteria.
+1. 从出生点进入附近住宅的地面门洞。紫色标记是床；木色楼梯连接上层，站到端部再顺着踏步走。
+2. 前往商店，从地面门洞进入。蓝色标记是容器；E 搜索会消耗游戏时间，移动可立即取消。
+3. 商店内两段楼梯分别连接一至二层、二至三层，每层有独立物资和墙体。僵尸能沿楼梯追击，血条只在对应僵尸可见时出现。
+4. 回住宅上层休息，保存，再读档继续探索。物资、探索和搜索进度不会因换层或读档重置。
+5. 橙色碎玻璃是可选的轻伤验证点。伤口感染字段与隐藏的僵尸病毒状态彼此独立。
 
-## Verification
+地图尚为小型占位街区；屋顶不可行走，当前不支持跳窗坠落、电梯或结构破坏。NPC 会寻找已知有限物资、吃喝、上楼休息与避险；完整社交及全身医疗不在此版本内。
 
-The smoke test loads the complete scene and checks the map pressure model, FOV/LOS, medical-state separation, zombie seed population, and inventory data flow:
+详见 [当前进度与多楼层设计](docs/MVP_BLUEPRINT.md)。
+
+建筑显示使用独立楼层组件进行室内剖切，后侧墙保持可见；室外挡住玩家的建筑也会自动剖切，移出视线后恢复。路牌、树木在玩家投影附近局部抖动淡化。组件接口和适用范围见 [建筑可见性说明](docs/BUILDING_VISIBILITY.md)。
+
+## 验证
 
 ```bash
+flatpak run org.godotengine.Godot --headless --path . --editor --quit
 flatpak run org.godotengine.Godot --headless --path . res://tests/mvp_smoke_test.tscn
 ```
+
+测试覆盖分层碰撞、全部楼梯、跨层 AI、近战隔离、血条隐藏、需求/库存、动作取消、倍速及存档恢复。可选真实画面检查（短暂打开窗口，截图写入被忽略的 .godot 目录）：
+
+```bash
+flatpak run org.godotengine.Godot --path . res://tests/mvp_smoke_test.tscn -- --capture
+```
+
+保存文件位于 Godot 的项目用户数据目录，槽名为 `afterlight_mvp_v1.save`。当前保存格式版本为 1，暂不支持旧版本迁移。此轮没有做 Windows 导出或长时平衡测试。

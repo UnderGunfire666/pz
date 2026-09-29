@@ -1,153 +1,114 @@
-# Godot 4.7.2 MVP Blueprint — Afterlight: Orangeville
+# Afterlight MVP：当前进度与多楼层设计
 
-## Outcome and scope
+## 当前交付状态
 
-Build a small, single-player, oblique top-down survival sandbox set in an Orangeville-inspired neighbourhood at the beginning of an outbreak. The first playable build proves a cautious loop: enter a safehouse, scavenge food, suffer a light wound, use sight and sound to avoid zombies, return to rest, and continue exploring.
+项目是 Godot 4.7.2 的单机 3D 灰盒生存原型。地图仍是 18 × 14 的小街区，用独立楼层网格驱动模拟、程序化 Mesh 驱动显示。两栋住宅各两层，杂货店三层；上层有独立隔墙、物资及休息点。建筑为 Orangeville 题材占位布局，尚非真实城市测绘地图。
 
-The differentiator is an individual-survivor NPC simulation, but it is fifth in MVP priority. The player’s survival pressure and readable environment must be solid before the NPC layer grows.
+本轮开始时，项目已有缩放、3D 正交旋转相机、时间按钮、近战和搜索进度，但楼层只由渲染器根据坡道位置推算，AI、交互、声音和碰撞仍主要依赖地面数据。本轮将这些系统接到了同一份分层世界数据上。
 
-This repository implements a greybox version of that loop. It intentionally uses procedural 3D meshes and compact data objects so a solo developer can validate feel before investing in art assets, animation, complex UI, or a large map.
-
-## Product decisions
-
-- Engine: Godot 4.7.2, Windows-first, single player.
-- Presentation: a procedural 3D world over a logical 2D simulation grid. The oblique orbit camera supports middle-mouse rotation; multi-storey buildings cull geometry outside the player's active floor.
-- Time: one in-game day per real-time hour at normal speed; pause and 3× fast-forward use a simulation scale rather than freezing the HUD.
-- Zombies: ordinary zombies only. Rural/road cells are low pressure; the grocery is high pressure. No special variants or global horde simulation.
-- Perception: distance + wall-face line of sight + ambient light first; player vision uses a facing fan plus a small omnidirectional near-field radius. Entities outside that view are not rendered.
-- Medical terminology: **wound infection** is an observable field on an individual wound. **Zombie-virus infection** is a separate hidden state. The UI must never use the former term to reveal the latter.
-
-## Recommended project layout
-
-```text
-res://
-├── scenes/
-│   └── main.tscn                    # first-playable composition root
-├── scripts/
-│   ├── actors/
-│   │   ├── player_controller.gd
-│   │   ├── zombie.gd
-│   │   └── survivor_npc.gd
-│   ├── data/
-│   │   ├── world tile, building, room, trait data
-│   │   └── item, stack, container data
-│   ├── game/game_root.gd
-│   ├── systems/
-│   │   ├── game_time.gd, noise_bus.gd, visibility_system.gd
-│   │   ├── survival_system.gd, player_state.gd
-│   │   ├── inventory_grid.gd, interaction_system.gd, npc_brain.gd
-│   ├── ui/mvp_hud.gd
-│   └── world/world_map.gd, zombie_spawner.gd
-├── tests/mvp_smoke_test.tscn
-└── docs/MVP_BLUEPRINT.md
-```
-
-When content production begins, replace hard-coded `WorldTileData` and item definitions with `.tres` resources or imported map data. Keep runtime systems consuming interfaces/query methods rather than direct scene paths.
-
-## Core scene and node hierarchy
-
-The current `main.tscn` starts small and composes the greybox runtime in `MVPGameRoot`:
-
-```text
-Autoloads
-├── GameTime                 # clock, pause/normal/fast simulation scale
-└── NoiseBus                 # decoupled sound events
-
-AfterlightMVP (MVPGameRoot)
-├── WorldMap                 # logical tiles, buildings, LOS and pressure data
-├── World3DViewport          # procedural 3D terrain, floors, walls, actors and orbit camera
-├── Actors
-│   ├── Player               # PlayerController
-│   ├── Zombie*              # ZombieActor instances from pressure seed
-│   └── SurvivorNPC          # one autonomous B-level survivor
-├── VisibilitySystem
-├── InteractionSystem        # search, rest, hazard, sorting duration
-├── ZombieSpawner
-└── HUD
-```
-
-Split this later into `world.tscn`, `player.tscn`, `zombie.tscn`, `survivor_npc.tscn`, and reusable interaction scenes only after the greybox contracts stabilize. Premature scene fragmentation is not valuable for this MVP.
-
-## Runtime data flow
-
-```text
-Input ──> PlayerController ──> NoiseBus ──> zombies / NPC
-   │              │
-   │              └──> PlayerState + SurvivalSystem
-   │
-   └──> InteractionSystem ──> InventoryGrid / ContainerData / rest
-
-GameTime ──> player survival, NPC needs, zombies, search/rest durations
-WorldMap ──> LOS + pressure + ambient light ──> VisibilitySystem
-VisibilitySystem ──> map darkening + zombie/NPC hidden state
-```
-
-This is intentionally event/query based. For example, a zombie hears a `NoiseBus` event rather than reaching into player code; later firearms, alarms, or NPC actions can emit the same event.
-
-## Core classes and contracts
-
-| Area | Classes | MVP responsibility | Deliberately deferred |
-| --- | --- | --- | --- |
-| Player | `PlayerController`, `PlayerState` | WASD motion, RMB mouse-facing aim, directional melee, state ownership | animation tree, weapon families, multiplayer prediction |
-| World | `WorldMap`, `WorldTileData`, `BuildingData`, `RoomData`, `World3DView` | grid queries, procedural 3D geometry, ramp traversal, floor culling, camera orbit, collision, LOS, safehouse and pressure/stress metadata | streaming map, navmesh bake, full Orangeville import |
-| Visibility | `VisibilitySystem` | fan FOV, lighting-adjusted range, dark/grey unknown map, hide NPC/zombies outside FOV | movement/stance/eye-condition modifiers, multiplayer visibility |
-| Zombies | `ZombieSpawner`, `ZombieActor` | density by local pressure, ordinary chase, visual/noise response, basic melee threat | migration simulation, meta-population, variants, large-horde optimisation |
-| Items | `ItemDefinition`, `ItemStack`, `ContainerData`, `InventoryGrid` | grid footprint, weight cap, container contents, tag consumption, sorting API | drag UI, equipment paper doll, crafting, nested containers |
-| Survival | `SurvivalSystem` | hunger, thirst, fatigue, stamina; rest/eat/drink effects | full health panel and body-part treatment |
-| NPC | `SurvivorNPC`, `NPCBrain`, `TraitSet` | needs, danger check, flee/rest/scavenge goal, shared traits, local memory/relationship save hooks | factions, rumours, settlements, global social simulation |
-| Interaction | `InteractionSystem` | nearby search/rest, deliberate search duration, known-content shortcut, glass hazard | generic action UI, locking, full looting UX |
-
-### Medical-state boundary
-
-`PlayerState.wounds` stores wound type, location, severity, and `wound_infection`. The HUD is allowed to show, for example, `Glass cut, left calf (clean)` and later `(... infected)`.
-
-`zombie_virus_exposure` and `zombie_virus_infection_progress` are separate internal fields. A zombie scratch can set exposure, but no player-facing display exposes the virus state. Full body parts, treatment, bite lethality tuning, latent-infection progression, and reanimation belong to a later medical slice.
-
-## MVP implementation order
-
-1. **Movement, vision, noise, attacks** — complete first. If aiming, facing, FOV hiding, LOS, and noise do not feel tense, do not add more content.
-2. **Survival and time** — hunger, thirst, fatigue, stamina, rest, pause, normal speed, and fast-forward must all advance consistently.
-3. **Map pressure** — a compact block with rural/residential/commercial metadata, a safehouse, and a high-pressure grocery.
-4. **Inventory and looting** — grid size, carry weight, containers, search/sort time cost, and simple food/water consumption.
-5. **One autonomous NPC** — urgent needs → local threat assessment → flee, rest, or scavenge; preserve trait/memory/relationship hooks.
-
-The checked-in prototype follows this order. It does not hide the fact that visual content, UI polish, and long-session balancing remain future work.
-
-## Solo-developer roadmap
-
-| Milestone | Scope | Exit criterion |
+| 系统 | 当前实现 | 尚未覆盖 |
 | --- | --- | --- |
-| 0. Greybox foundation (2–4 days) | current map, controls, FOV, time, HUD | player can traverse and read the space without art assets |
-| 1. Combat/perception feel (1–2 weeks) | hit timing, zombie pathing, basic sound occlusion, tuning tools | a group of 1–3 zombies is manageable; a cluster is scary |
-| 2. Survival/loot vertical slice (1–2 weeks) | clear inventory panel, containers, food/water, rest, saves | the full loop survives save/load and is understandable without developer notes |
-| 3. NPC vertical slice (2–3 weeks) | one to five persistent NPCs, local memory, traits, claimed-home logic | NPCs independently satisfy needs and react believably to a nearby threat |
-| 4. Content pass (2–4 weeks) | one polished neighbourhood, audio, tiles, UI/art pass, balance | 20–30 minute repeatable first-playable session |
-| 5. Early-access hardening | options, telemetry/debug tools, save migration, performance pass | feature freeze on core loop before wider map/content expansion |
+| 移动与视角 | 屏幕方向 WASD、冲刺、RMB 朝向、MMB 旋转、滚轮/按钮缩放 | 动画、手柄、重新绑定按键 |
+| 多楼层 | 每层独立数据、四段楼梯、三层往返、楼洞及护栏显示、逐栋剖切 | 电梯、攀爬、跳窗、坠落、可通行屋顶 |
+| 感知 | 分层扇形 FOV、近身视野、墙遮挡、昼夜距离；声音经墙与楼梯衰减 | 跨窗垂直射线、复杂声学、气味 |
+| 战斗 | 范围/朝向/墙体/楼层验证，体力与冷却，单次近战一个目标，伤害闪烁与血条 | 武器种类、精细命中动画 |
+| 生存 | 饥饿、口渴、疲劳、体力；有限食水、可重复休息、基础生命与死亡重开 | 身体部位治疗、病毒发病和再生完整规则 |
+| 物品/动作 | 6 × 4 占格与重量、搜索/整理耗时、动作取消、剩余物资再次领取 | 拖拽旋转、装备格、嵌套容器 |
+| NPC | 单个幸存者按需求找已知物资、消耗真实库存、上楼休息、避险、记忆存档 | 完整社交、目击关系系统、派系 |
+| 保存 | 单槽 F5/F9，按版本验证后恢复楼层、楼梯、搜索进度、物资、AI与探索记录 | 多槽、旧版本迁移、自动存档 |
+| 地图压力 | 商店多、路边少的固定初始种群，远离玩家且不可见的位置才允许低频补充 | 全局尸群迁移、动态灾变大事件 |
 
-These are sequencing estimates, not commitments; finish each exit criterion before moving down the list. Keep debug overlays for FOV, pressure, NPC goal, sound radius, and path intent from day one.
+## 空间数据与权威
 
-## Explicitly out of scope for this MVP
+运行时位置由 `logical_position: Vector2`、`floor_level: int`、`stair_id: String` 组成。平面对应 3D 世界 X/Z；高度由 WorldMap 计算。楼层内部从 0 编号，HUD 从 1 编号。
 
-- Multiplayer/co-op implementation or networking architecture beyond clean ownership boundaries.
-- Colony simulation, factions, leadership, settlements, broad reputation, rumours, or a world-scale social graph.
-- D-level world evolution, global event director, guaranteed scripted outbreak arc, or a mandatory campaign.
-- Full body-part injuries, wound treatment, visible zombie-virus diagnosis, advanced reanimation, and medical crafting.
-- Special zombies, boss encounters, elaborate migration, and high-scale horde simulation.
-- Large-map streaming, production Orangeville geography, vehicles, farming, electricity/water utilities, crafting depth, or mod support.
-- Final grid drag/drop UX, equipment slots, deep nested containers, and full item taxonomy.
+`WorldMap` 是唯一通行权威。3D 渲染器、玩家、僵尸和 NPC 都读取它，渲染器不能改变角色楼层。
 
-## First playable launch plan
+- `FloorData`：稀疏格子、独立墙面段、房间。缺失的上层格子表示无支撑空间。
+- `BuildingData`：建筑范围、用途、压力、楼层与楼梯 ID。
+- `RoomData`：房间 ID、范围与所属楼层。
+- `WorldTileData`：地面类型、可行走标记、房间、建筑、压力、楼层。
+- `StairLink`：稳定 ID、建筑、两端平台坐标、起止楼层、宽度。
+- `LocalNavigation`：NPC/僵尸共用的路径缓存及跟随器。
 
-Package only the compact neighbourhood and verify the following before sharing a build:
+墙采用面段阻挡，不把整个墙格都判为实心。角色半径参与检测；视觉网格与碰撞都来自这些墙段。上层地板没有连接的外沿不可通过，屋顶默认不属于导航空间。
 
-- Start outside the safehouse at outbreak morning; no forced story sequence is required.
-- Enter the house, reach the grocery, search food, trigger the light glass wound, see/avoid zombies, rest at home, then leave again.
-- RMB changes facing to the mouse; standard facing follows motion; actor visibility obeys the fan FOV.
-- MMB drag rotates the 3D camera; walkable ramps connect floors, and only the player's current floor is rendered.
-- A melee strike creates a basic sound event and nearby zombies/NPCs react only through the common noise path.
-- Pause, normal, and fast-forward affect clock, NPC/zombie thinking, search/rest durations, and needs consistently.
-- Grocery pressure visibly produces more ordinary zombies than rural/residential space.
-- A wound display can distinguish clean from wound-infected injuries without disclosing zombie-virus infection.
-- Run `tests/mvp_smoke_test.tscn` headlessly and manually complete the route once at normal speed and once with fast-forward.
+## 楼梯规则
 
-If any criterion fails, fix the vertical slice rather than adding map size or social systems.
+1. 从当前楼层的平台沿楼梯方向进入，允许一定方向误差以适配相机旋转后的键盘移动。
+2. 进入后记录楼梯 ID，移动约束在中心线上；沿线进度决定连续高度。
+3. 可以停下、暂停、反向返回，不能从中段侧向进入或离开。
+4. 到达另一端才提交目标楼层并清除楼梯 ID；侧向走出平台不能误触发立即折返。
+5. 玩家、NPC 和僵尸共用以上流程。AI 路径包含准确的平台端点，不靠贴墙直走碰运气。
+6. 楼梯占用区在上下两层均保留为受控通道；MVP 不支持从楼梯下方钻过。
+7. 同一楼梯上的近战按真实高度与平面距离判断；不同楼梯或隔着楼板不能互打。平台与楼梯中段之间的攻击暂不跨表面判定。
+
+示例连接：
+
+| 楼梯 | 从 → 到 | 下端 X/Z | 上端 X/Z |
+| --- | --- | --- | --- |
+| safehouse_0_1 | 0 → 1 | 3.25, 4.5 | 5.75, 4.5 |
+| neighbour_0_1 | 0 → 1 | 2.7, 9.7 | 5.3, 9.7 |
+| grocery_0_1 | 0 → 1 | 11.25, 7.25 | 11.25, 3.75 |
+| grocery_1_2 | 1 → 2 | 12.25, 3.75 | 12.25, 7.25 |
+
+## 寻路、感知与压力
+
+导航图由可站立的采样点与楼梯端点组成，本层边经过墙面/支撑验证，跨层边仅来自显式楼梯。AI 约每 0.8 模拟秒重规划；不可达目标保持原位，不穿墙。路径缓存不入存档，读档后重建；楼梯中途则先恢复到合法平台。
+
+FOV 和探索记忆使用 `(x, z, floor)` 键。普通楼板完全遮断跨层视觉，楼梯连接上的角色使用同一连接的距离/方向检查。MVP 暂不允许透过楼梯洞观察其他层的完整房间。
+
+声音事件包含位置、半径、类别和楼层。墙增加传播代价；跨层声音沿楼梯传播并衰减。听见声音不等于看见声源。僵尸看到玩家进入楼梯后记住该楼梯的出口；之后只按声音或新视线更新目标。
+
+每层都有独立压力查询。HUD 的附近威胁计数只使用当前可见的同层僵尸，不用隐藏敌人位置为玩家提供雷达。
+
+## 3D、剖切与 HUD
+
+World3DView 负责地板、楼板开洞、墙、屋顶、楼梯踏步/护栏和角色外观。它读取角色真实支撑高度用于位置与相机跟随，坡道上瞄准也使用当前高度。
+
+进入建筑时，仅对该栋建筑隐藏高于当前层的遮挡结构与屋顶；楼梯途中保留连接两端。其他建筑保留外部体量。当前层的墙不会随相机角度凭空消失。地板和楼梯洞按同一连接数据生成。
+
+角色、血条和交互标记使用统一的可见条件：换层、转身失去视野或死亡后不能残留浮空血条。昼夜光照参与照明和感知距离。
+
+HUD 使用上下边缘布局；背包/健康与帮助默认折叠。按钮点击不会触发游戏攻击。显示当前位置与楼层，搜索中显示进度及取消方式。背包显示实际 6 × 4 占格，自动整理仍需耗时。
+
+## 交互与生存闭环
+
+交互点拥有独立 ID、位置和楼层；同坐标不同层的容器是不同对象。距离、墙遮挡、当前楼层、是否在楼梯中共同决定是否可交互。
+
+角色移动、瞄准、攻击、吃喝、整理、再次交互、Esc、受伤或离开目标会取消当前动作。搜索进度持续写在容器上；取消后再搜索从该进度继续。暂停只冻结进度；相机操作与时间控制不是角色动作，不取消搜索。
+
+已搜索的容器可以立刻查看和尝试收取剩余内容，背包装不下的东西保留在原容器。消费只扣一个数量单位；整理失败回退原布局，不能丢物。
+
+休息可以多次执行并随时间连续恢复疲劳，完成时不再次发放整段奖励。NPC 从已知容器中选择可达且风险较低的资源，实际扣库存、吃喝，再返回楼上的家休息。拥有者标记阻止 NPC 随意取用他人已声明物资。
+
+基础生命使僵尸攻击有明确后果，死亡后暂停并允许 Enter 新开或 F9 读档。医学数据继续分离：
+
+- **wound infection（伤口感染）**：伤口上的可观察字段。
+- **zombie-virus infection（僵尸病毒感染）**：独立隐藏状态，HUD 不展示。
+
+潜伏病毒普遍携带、咬伤近乎致命、头部破坏阻止再生等完整规则仍属于后续医学切片，不能把当前简单进度占位宣称为已完成。
+
+## 保存契约
+
+F5 写临时文件，成功后替换单个正式槽；写入失败保留原存档。F9 只读取基本 Variant 数据，验证版本、空间位置、库存尺寸/重量和必需字段后再修改当前世界。
+
+保存：时钟、玩家需求/生命/伤口/隐藏病毒状态、占格与数量、每个容器的内容和搜索进度、危险点触发状态、僵尸位置/生命/追踪目标、NPC 需求/已知容器/记忆关系、分层探索、试玩里程碑。楼梯位置用连接 ID 与平面进度恢复。
+
+不保存可重建的渲染节点与寻路缓存。玩家正在进行的动作会取消，容器搜索进度保留；NPC 的局部搜索计时取消并重新选择目标。读档后默认暂停。
+
+## 冗余清理
+
+已删除渲染器决定楼层的旧算法、重复坡道高度计算、旧二维投影接口、无效的屏幕 FOV 多边形、Root 中对隐藏二维角色重复执行的可见性更新，以及一次性休息限制和重复恢复奖励。NPC 与僵尸的重复寻路跟随逻辑合并为 LocalNavigation。
+
+角色的 Node2D 当前仅作为轻量运行时组织节点；平面坐标仍有明确用途，不为“纯 3D”形式重写所有模拟系统。没有删除用户美术素材、项目设置或历史存档。
+
+## 验收与后续
+
+自动化覆盖：分层布局/碰撞、全部楼梯上下/反向/侧向限制、NPC 上楼恢复、僵尸三层来回与楼梯战斗、FOV/血条不泄露、搜索取消恢复、暂停/倍速、真实库存消耗、重复休息、存档替换/读档/非法楼层拒绝与楼梯 AI 恢复。还检查实际 3D 地面/顶层画面。
+
+人工试玩路线：进入住宅 → 认识楼梯和床 → 去商店搜索 → 上二/三层搜索独立物资 → 吸引并甩开追击者 → 回住宅上层休息 → 保存后读档继续探索。玻璃轻伤为可选验证点，不要求玩家刻意受伤才能自由游玩。
+
+下一阶段按原优先级打磨：战斗/避障手感 → 背包操作与音效 → 小地图内容 → NPC 更自然的局部决策。Windows 导出、长时平衡、保存版本迁移和外部试玩尚需独立验收。
+
+本 MVP 明确不包含：电梯/地下室内容、可行走屋顶/跳窗坠落、结构倒塌、全身体医疗、多人、派系、殖民地、谣言网络和全球灾变模拟。数据模型允许日后扩展，但这些功能未被伪装成当前成果。
