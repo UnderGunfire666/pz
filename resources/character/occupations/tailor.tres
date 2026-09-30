@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:tailor"
+display_name = "Tailor"
+description = ""
+point_bonus = 2
+xp_boosts = {"Tailoring": 4}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("KnitBalaclavaFace", "KnitBalaclavaFull", "KnitBeany", "KnitDoily", "KnitLegwarmers", "KnitScarf", "KnitSocks", "KnitSweaterVest", "KnitWoolyHat", "SewCrudeLeatherBackpack", "SewHideBoots", "SewHidePants", "SewHideSleepingBag", "SewHideCoat", "SewHideHoodie", "SewHideJacket", "SewHideRobe", "SewHideHat", "MakeTarpChestRig", "AssembleSmallFramepack", "AssembleLargeFramepack", "AssembleAdvancedFramepack", "AssembleAdvancedLargeFramepack", "MakeGarbageBagTankTop", "MakeTarpTankTop", "MakeGarbageBagDress", "MakeTarpDress", "WeaveTwineShoes", "SewLeatherCodpiece", "SewLeatherGorget", "SewHolster", "SewHolsterDouble", "MakeWesternBoots", "SewBelt", "SewLeatherToolRoll", "SewSandals", "SewLeatherGloves", "SewLeatherWaterBag", "SewBandolier", "SewShellsBandolier", "SewHideWallet", "SewFurredHideCoat", "SewFurredHideJacket", "SewLeatherGaiter", "SewLeatherVambrace", "SewElbowPads", "SewKneePads", "SewLeatherPants", "SewHideFannyBag", "SewClothSatchel", "SewDressKnees", "SewLongjohns", "SewShirt", "SewSkirtKnees", "SewTrousers", "SewDressLong", "SewLongjohnsBottom", "SewShirtSleeveless", "SewSkirtLong")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

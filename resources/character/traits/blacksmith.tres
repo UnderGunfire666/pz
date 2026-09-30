@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:blacksmith"
+display_name = "Blacksmith Knowledge"
+description = "Can use an anvil to create metal items."
+cost = 6
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {"Blacksmith": 2, "Maintenance": 1}
+incompatible_trait_ids = PackedStringArray("base:blacksmith2")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("Advanced_Forge", "Blast_Furnace", "Charcoal_Burner_MetalDrum", "Charcoal_Pit", "Dome_Kiln", "Forge", "Smelting_Furnace", "Forge_Primitive_Forge", "Primitive_Furnace", "Forge_Baking_Pan", "Forge_Baking_Tray", "Forge_Bucket", "Forge_Ball_Peen_Hammer_Head", "Forge_Clawhammer_Head", "Forge_Cooking_Pot", "Forge_Corkscrew", "Forge_Crowbar", "Forge_Crude_Shortsword_Blade", "Forge_Crude_Sword_Blade", "Forge_Door_Knob", "Forge_Fine_Butter_Knives", "Forge_Fine_Forks", "Forge_Fine_Spoons", "Forge_Fishing_Hooks", "Forge_Forceps", "Forge_Forks", "Forge_Frying_Pan", "Forge_Garden_Hoe_Head", "Forge_Gardening_Trowel", "Forge_Hand_Scythe_Head", "Forge_Hinge", "Forge_Hunting_Knife_Blade", "Forge_Kettle", "Forge_Kitchen_Knife_Blade", "Forge_Large_Knife_Blade", "Forge_Machete_Blade", "Forge_Masons_Chisel", "Forge_Masons_Trowel", "Forge_Meat_Cleaver_Blade", "Forge_Metalworking_Chisel", "Forge_Metalworking_Pliers", "Forge_Metalworking_Punch", "Forge_File", "Forge_Drill", "Forge_Nails", "Forge_Needle", "Forge_Pick_Axe_Head", "Forge_Roasting_Pan", "Forge_Saucepan", "Forge_Saw", "Forge_Scissors", "Forge_Scythe_Head", "Forge_Spade_Head", "Forge_Sheep_Shears", "Forge_Sledgehammer_Head", "Forge_Small_Knife", "Forge_Small_Steel_Sheet", "Forge_Smithing_Hammer_Head", "Forge_Spoons", "Forge_Steel_Sheet", "Forge_Straight_Razor", "Forge_Sword_Blade", "Forge_Tongs", "Forge_Tweezers", "MakeCrudeWhetstone", "Forge_Heading_Tool", "Forge_Draw_Plate", "ForgeMaceHead", "MakeSpikedClub", "ForgeSpearHead", "ForgeLongSpearHead", "Forge_Wood_Axe_Head", "Forge_Old_Axe_Head", "Forge_Hand_Axe_Head", "Forge_Fleshing_Tool", "Forge_Cup", "Forge_Buckle", "Forge_Lantern", "Forge_Carpentry_Chisel", "Forge_Wrench")
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("recipe_unlocks", "non_skill_trait_effect:base:blacksmith")
+can_change_during_play = false

@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:mason"
+display_name = "Mason"
+description = "Better at building stone and brick constructions."
+cost = 2
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {"Masonry": 2}
+incompatible_trait_ids = PackedStringArray()
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("Advanced_Forge", "Blast_Furnace", "Dome_Kiln", "Forge", "Smelting_Furnace", "Forge_Primitive_Forge", "Primitive_Furnace")
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("recipe_unlocks", "non_skill_trait_effect:base:mason")
+can_change_during_play = false

@@ -8,8 +8,9 @@ var player: PlayerController
 var camera: Camera3D
 var world_3d_view: World3DView
 var rotating_camera := false
+var character_catalog := CharacterCatalog.new()
 var player_state := PlayerState.new()
-var inventory := InventoryGrid.new(Vector2i(6, 4), 12.0)
+var inventory := InventoryGrid.new(false)
 var zombie_spawner: ZombieSpawner
 var npc: SurvivorNPC
 var interactions: InteractionSystem
@@ -50,6 +51,8 @@ func _ready() -> void:
 	visibility.setup(world_map)
 
 	player = PlayerController.new()
+	player_state.setup_character(character_catalog)
+	player_state.setup_inventory(inventory)
 	player.name = "Player"
 	actor_layer.add_child(player)
 	player.setup(world_map, player_state, Vector2(4.45, 6.65))
@@ -60,6 +63,7 @@ func _ready() -> void:
 	interactions.visible = false
 	add_child(interactions)
 	interactions.setup(world_map, player, player_state, inventory, visibility)
+	player_state.rags_requested.connect(_spawn_destroyed_clothing_rags)
 	player.action_intent.connect(func() -> void: interactions.interrupt_action())
 	interactions.notification_requested.connect(show_notification)
 	interactions.food_found.connect(func() -> void: milestones["food"] = true)
@@ -99,10 +103,13 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	var game_seconds := GameTime.last_advanced_game_seconds
 	if game_seconds > 0.0 and not player_state.is_dead():
-		player_state.survival.advance(game_seconds, player.exertion(), interactions.is_resting())
-		player_state.advance(game_seconds)
+		if interactions.is_resting() and local_zombie_count(4.0) > 0:
+			interactions.interrupt_action("Danger woke you")
+		player_state.advance(game_seconds, player.exertion(), interactions.is_resting(),
+			local_zombie_count(6.0), player.exertion() > 0.0)
 
-	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level)
+	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
+		player_state.perception_multiplier())
 	_update_milestones()
 	notification_seconds_left = maxf(0.0, notification_seconds_left - delta)
 	if notification_seconds_left <= 0.0 and not player_state.is_dead():
@@ -113,6 +120,16 @@ func _process(delta: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if hud != null and hud.character_creation_panel != null and hud.character_creation_panel.visible:
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+		hud.toggle_inventory()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_C:
+		hud.toggle_character_panel()
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
 		rotating_camera = event.pressed
 		get_viewport().set_input_as_handled()
@@ -123,17 +140,25 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if hud != null and hud.character_creation_panel != null and hud.character_creation_panel.visible:
+		return
 	if event is InputEventMouseButton:
 		if not event.pressed:
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			hud.adjust_zoom(1.12)
+			if not hud.pointer_over_page(event.position): hud.adjust_zoom(1.12)
 			return
 		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			hud.adjust_zoom(1.0 / 1.12)
+			if not hud.pointer_over_page(event.position): hud.adjust_zoom(1.0 / 1.12)
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			interactions.interrupt_action()
+			var switchable := inventory.held_switchable()
+			if player.aim_mode and not switchable.is_empty() and inventory.held_weapon() == null:
+				inventory.toggle_switchable(switchable["unit"]["uid"])
+				show_notification("%s switched %s." % [switchable["stack"].definition.display_name,
+					"on" if switchable["unit"].get("switched_on", false) else "off"])
+				return
 			player.try_attack()
 			return
 		if event.button_index == MOUSE_BUTTON_RIGHT:
@@ -154,12 +179,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.keycode == KEY_ESCAPE:
 		interactions.interrupt_action()
 		return
+	if interactions.is_resting() and event.keycode in [KEY_SPACE, KEY_1, KEY_2]:
+		return
 	if event.keycode in [KEY_W, KEY_A, KEY_S, KEY_D, KEY_SHIFT]:
 		interactions.interrupt_action()
-	elif event.keycode == KEY_E:
-		if interactions.interrupt_action():
-			return
-	elif event.keycode in [KEY_F, KEY_V, KEY_R]:
+	elif event.keycode in [KEY_F, KEY_V]:
 		interactions.interrupt_action()
 	match event.keycode:
 		KEY_E:
@@ -195,10 +219,15 @@ func _on_player_attack(attack_position: Vector2, direction: Vector2) -> void:
 			nearest = zombie
 			nearest_distance = offset.length()
 	if nearest != null:
-		nearest.take_damage(1)
+		nearest.take_damage(inventory.attack_damage())
+		if inventory.held_weapon() == null and nearest.health > 0:
+			var shoved := world_map.move_actor(nearest.logical_position, nearest.floor_level, direction.normalized() * 0.3, nearest.stair_id)
+			nearest.logical_position = shoved["position"]
+			nearest.floor_level = shoved["floor"]
+			nearest.stair_id = shoved["stair_id"]
 		hit_anything = true
 	if hit_anything:
-		show_notification("Melee hit. The sound may draw more attention.")
+		show_notification("%s hit." % inventory.attack_type().capitalize())
 	else:
 		show_notification("You swing into open space. The noise still carries.")
 
@@ -209,6 +238,11 @@ func _on_player_attacked(_world_position: Vector2) -> void:
 	if not player_state.is_dead():
 		GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 		show_notification("A zombie claws you. Check your wounds and create distance.")
+
+
+func _spawn_destroyed_clothing_rags(count: int) -> void:
+	if count > 0:
+		interactions.spawn_ground_stack(ItemStack.new(ClothingSystem.rag_definition(), count))
 
 
 func melee_contact(zombie: ZombieActor, attack_range: float) -> bool:
@@ -224,7 +258,7 @@ func melee_contact(zombie: ZombieActor, attack_range: float) -> bool:
 func _on_player_died() -> void:
 	interactions.interrupt_action("You collapsed")
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
-	show_notification("You died. Enter: new run · F9: load quick save")
+	show_notification("You died%s. Enter: new run · F9: load quick save" % (" from the infection" if player_state.should_reanimate() else ""))
 
 
 func _update_milestones() -> void:
@@ -253,16 +287,11 @@ func _on_rest_completed() -> void:
 func _consume(tag: String) -> void:
 	if player_state.is_dead() or GameTime.simulation_scale() <= 0.0:
 		return
-	var stack := inventory.take_first_with_tag(tag)
-	if stack == null:
+	var uid := inventory.first_with_tag(tag)
+	if uid.is_empty():
 		show_notification("No %s item in your inventory." % tag)
 		return
-	if tag == "food":
-		player_state.survival.eat(24.0)
-		show_notification("You eat %s." % stack.label())
-	else:
-		player_state.survival.drink(32.0)
-		show_notification("You drink %s." % stack.label())
+	interactions.request_use(uid)
 
 
 func show_notification(message: String) -> void:

@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:overweight"
+display_name = "High Weight"
+description = "Reduced running speed, low endurance and prone to injury."
+cost = 0
+selectable = false
+profession_trait = true
+disabled_in_multiplayer = false
+xp_boosts = {"Fitness": -1}
+incompatible_trait_ids = PackedStringArray("base:athletic", "base:fit", "base:emaciated", "base:very underweight", "base:underweight")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("non_skill_trait_effect:base:overweight")
+can_change_during_play = true

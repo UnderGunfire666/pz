@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:repairman"
+display_name = "DIY Expert"
+description = ""
+point_bonus = -2
+xp_boosts = {"Woodwork": 1, "Maintenance": 2, "SmallBlunt": 1, "Masonry": 1}
+granted_trait_ids = PackedStringArray("base:inventive_prof")
+granted_recipe_ids = PackedStringArray("BarbedWireWeapon", "BoltBat", "MakeBrakeWeapon", "MakeBucketMaul", "CanReinforceLongWeapon", "CanReinforceShortWeapon", "CanReinforceWeapon", "MakeGardenForkHeadWeapon", "MakeKettleMaul", "RailspikeBaseballBat", "MakeRailspikeCudgel", "MakeRailspikeIronPipe", "MakeRailspikeLongHandle", "MakeRailspikeWeapon", "MakeRakeHeadWeapon", "MakeSawPlank", "MakeSawbladeCudgel", "MakeSawbladeLongHandle", "MakeSawbladePlank", "MakeSawbladeTableLeg", "MakeSawbladeWeapon", "SheetMetalWeapon", "MakeSpadeHeadCudgel", "MakeScrewdriver")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

@@ -1,8 +1,9 @@
 class_name ContainerData
 extends RefCounted
 
-## Known contents can be viewed immediately after a container has been searched.
-## The first deliberate search takes game time and is handled by InteractionSystem.
+## Furniture capacity is volume only; ground piles are unbounded.
+const CABINET_DIMENSIONS := Vector3(50, 50, 100)
+var capacity := INF
 var id: String
 var display_name: String
 var contents: Array[ItemStack] = []
@@ -19,3 +20,15 @@ func _init(p_id: String, p_display_name: String, p_contents: Array[ItemStack] = 
 
 func is_empty() -> bool:
 	return contents.is_empty()
+
+
+func used_volume() -> float:
+	var volume := 0.0
+	for stack in contents: volume += stack.total_volume()
+	return volume
+
+
+func contents_weight() -> float:
+	var weight := 0.0
+	for stack in contents: weight += stack.total_weight()
+	return weight

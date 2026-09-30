@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="CharacterWorldRules" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/character_world_rules.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+free_trait_points = 0
+minimum_attribute_level = 0
+maximum_attribute_level = 10
+maximum_skill_level = 10
+default_occupation_id = "base:unemployed"

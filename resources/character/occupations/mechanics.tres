@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:mechanics"
+display_name = "Mechanic"
+description = "Familiar with the maintenance and repair of all vehicle models on the roads of Kentucky."
+point_bonus = -4
+xp_boosts = {"Mechanics": 4, "MetalWelding": 1}
+granted_trait_ids = PackedStringArray("base:mechanics2")
+granted_recipe_ids = PackedStringArray("Basic Mechanics", "Intermediate Mechanics", "Advanced Mechanics")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

@@ -1,0 +1,15 @@
+{
+  "canonical_version": "42.21",
+  "game_revision": "4a0e9546ec",
+  "inputs": [
+    "media/scripts/generated/characters/character_traits.txt",
+    "media/scripts/generated/characters/character_professions.txt",
+    "media/lua/shared/Translate/EN/UI.json",
+    "projectzomboid.jar:PerkFactory.class"
+  ],
+  "counts": {
+    "skills": 35,
+    "traits": 97,
+    "occupations": 25
+  }
+}

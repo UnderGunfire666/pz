@@ -69,6 +69,7 @@ func setup(
 	_build_environment()
 	_build_map()
 	_build_interaction_markers()
+	interactions.points_changed.connect(_refresh_interaction_markers)
 	_build_camera()
 	_build_visibility_controllers()
 	_build_demo_occluders()
@@ -310,6 +311,14 @@ func _build_interaction_markers() -> void:
 	for point in interactions.points:
 		var root := Node3D.new()
 		var mesh := TorusMesh.new()
+		if point.get("furniture", false):
+			var cabinet := MeshInstance3D.new()
+			var box := BoxMesh.new()
+			box.size = Vector3(0.5, 1.0, 0.5)
+			cabinet.mesh = box
+			cabinet.position.y = 0.5
+			cabinet.material_override = _material(Color("d9d9d2"))
+			root.add_child(cabinet)
 		mesh.inner_radius = 0.27
 		mesh.outer_radius = 0.34
 		var ring := MeshInstance3D.new()
@@ -340,6 +349,13 @@ func _build_interaction_markers() -> void:
 		root.position = Vector3(logical_position.x, float(floor_level) * WorldMap.FLOOR_HEIGHT, logical_position.y)
 		add_child(root)
 		interaction_markers.append({"node": root, "point": point})
+
+
+func _refresh_interaction_markers() -> void:
+	for marker in interaction_markers:
+		(marker["node"] as Node3D).queue_free()
+	interaction_markers.clear()
+	_build_interaction_markers()
 
 
 func _update_interaction_markers() -> void:
@@ -401,7 +417,8 @@ func _on_local_player_moved(_position: Vector2) -> void:
 func _update_structure_visibility() -> void:
 	# Constant-size fallback catches load/teleport and stair state changes without
 	# requiring gameplay setters. Only changed local context touches building nodes.
-	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level)
+	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
+		player.state.perception_multiplier())
 	var context := [player.logical_position, player.floor_level, player.stair_id, camera_yaw, visibility.revision,
 		camera_distance, camera.global_transform, get_viewport().get_visible_rect().size]
 	if context == _last_visibility_context:
@@ -609,6 +626,7 @@ func _update_actors() -> void:
 		model.position = Vector3(logical_position.x, world_map.elevation_at(logical_position, actor_floor, stair_id), logical_position.y)
 		if node == player:
 			model.rotation.y = atan2(-player.facing_direction.x, -player.facing_direction.y)
+			(visual["equipment_visual"] as PlayerEquipmentVisual).refresh()
 			var swing: Node3D = visual["swing"]
 			swing.visible = player._attack_flash_left > 0.0
 			swing.rotation.y = lerpf(-0.9, 0.9, 1.0 - clampf(player._attack_flash_left / 0.18, 0.0, 1.0))
@@ -632,15 +650,38 @@ func _update_actors() -> void:
 
 func _create_actor_visual(actor: Node2D) -> Dictionary:
 	var root := Node3D.new()
+	root.name = "PlayerVisual" if actor == player else "ActorVisual"
 	add_child(root)
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 0.26
-	capsule.height = 1.42
 	var body := MeshInstance3D.new()
-	body.mesh = capsule
-	body.position.y = 0.76
+	body.name = "Body"
+	var lower_body: MeshInstance3D = null
+	if actor == player:
+		var torso_mesh := CylinderMesh.new()
+		torso_mesh.top_radius = 0.22
+		torso_mesh.bottom_radius = 0.25
+		torso_mesh.height = 0.72
+		torso_mesh.radial_segments = 8
+		body.mesh = torso_mesh
+		body.position.y = 1.06
+		lower_body = MeshInstance3D.new()
+		lower_body.name = "LowerBody"
+		var lower_mesh := CylinderMesh.new()
+		lower_mesh.top_radius = 0.22
+		lower_mesh.bottom_radius = 0.17
+		lower_mesh.height = 0.7
+		lower_mesh.radial_segments = 8
+		lower_body.mesh = lower_mesh
+		lower_body.position.y = 0.35
+		root.add_child(lower_body)
+	else:
+		var capsule := CapsuleMesh.new()
+		capsule.radius = 0.26
+		capsule.height = 1.42
+		body.mesh = capsule
+		body.position.y = 0.76
 	root.add_child(body)
 	var head := MeshInstance3D.new()
+	head.name = "Head"
 	var head_mesh := SphereMesh.new()
 	head_mesh.radius = 0.23
 	head_mesh.height = 0.46
@@ -650,18 +691,24 @@ func _create_actor_visual(actor: Node2D) -> Dictionary:
 	var has_health := actor is ZombieActor
 	var material := _zombie_material if has_health else (_npc_material if actor is SurvivorNPC else _player_material)
 	body.material_override = material
+	if lower_body != null: lower_body.material_override = material
 	head.material_override = _player_accent_material if actor == player else material
 	if has_health:
 		head.position.z = -0.2
 	var direction_marker := MeshInstance3D.new()
+	direction_marker.name = "DirectionMarker"
 	var marker_mesh := BoxMesh.new()
 	marker_mesh.size = Vector3(0.07, 0.07, 0.42)
 	direction_marker.mesh = marker_mesh
 	direction_marker.position = Vector3(0.0, 0.85, -0.42)
 	direction_marker.material_override = _door_material
 	root.add_child(direction_marker)
-	var visual := {"root": root, "body": body, "head": head, "has_health": has_health}
+	var visual := {"root": root, "body": body, "head": head, "lower_body": lower_body, "has_health": has_health}
 	if actor == player:
+		var equipment_visual := PlayerEquipmentVisual.new()
+		root.add_child(equipment_visual)
+		equipment_visual.setup(player.state.inventory)
+		visual["equipment_visual"] = equipment_visual
 		visual["swing"] = _create_swing_visual(root)
 	if has_health:
 		visual["health_bar"] = _create_health_bar()
@@ -675,6 +722,7 @@ func _create_actor_visual(actor: Node2D) -> Dictionary:
 
 func _create_swing_visual(parent: Node3D) -> Node3D:
 	var root := Node3D.new()
+	root.name = "AttackSwing"
 	parent.add_child(root)
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)

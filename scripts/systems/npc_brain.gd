@@ -25,7 +25,7 @@ func choose_goal(
 		return Goal.DRINK
 	if survival.hunger < 65.0:
 		return Goal.SCAVENGE
-	if survival.fatigue > 35.0:
+	if survival.fatigue < 65.0:
 		return Goal.REST
 	if not last_noise_position.is_zero_approx() and self_position.distance_to(last_noise_position) < 2.0:
 		return Goal.WANDER

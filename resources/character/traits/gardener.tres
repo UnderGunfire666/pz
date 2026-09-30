@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:gardener"
+display_name = "Gardener"
+description = ""
+cost = 2
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {"Farming": 1}
+incompatible_trait_ids = PackedStringArray()
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeFliesCureFromCigarettes", "MakeFliesCureFromLooseTobacco", "MakeFliesCureFromChewingTobacco", "MakeMildewCure", "MakeAphidsCure", "MakeScarecrow", "base:carrot growing season", "base:broccoli growing season", "base:radish growing season", "base:strawberry growing season", "base:tomato growing season", "base:potato growing season", "base:cabbage growing season", "base:corn growing season", "base:kale growing season", "base:sweet potato growing season", "base:green pea growing season", "base:onion growing season", "base:garlic growing season", "base:soybean growing season", "base:basil growing season", "base:chives growing season", "base:cilantro growing season", "base:oregano growing season", "base:parsley growing season", "base:sage growing season", "base:rosemary growing season", "base:thyme growing season", "base:hops growing season", "base:sugar beet growing season", "base:bell pepper growing season", "base:cauliflower growing season", "base:cucumber growing season", "base:habanero growing season", "base:jalapeno growing season", "base:leek growing season", "base:lettuce growing season", "base:pumpkin growing season", "base:spinach growing season", "base:sunflower growing season", "base:turnip growing season", "base:watermelon growing season", "base:zucchini growing season", "base:chamomile growing season", "base:lemongrass growing season", "base:marigold growing season", "base:mint growing season", "base:black sage growing season", "base:broadleaf plantain growing season", "base:comfrey growing season", "base:common mallow growing season", "base:wild garlic growing season", "base:rose growing season", "base:poppy growing season", "base:lavender growing season", "MakeJar")
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("recipe_unlocks", "non_skill_trait_effect:base:gardener")
+can_change_during_play = false

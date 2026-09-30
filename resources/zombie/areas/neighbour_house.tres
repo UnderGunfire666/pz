@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="ZombieAreaDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/zombie_area_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "neighbour_house"
+display_name = "Neighbour House"
+pressure = 0.34
+population_points = PackedVector3Array(4.5, 10.5, 0, 4.5, 10.5, 1)
+adjacent_area_ids = PackedStringArray("roads", "outskirts")

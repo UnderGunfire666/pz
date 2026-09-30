@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:farmer"
+display_name = "Farmer"
+description = ""
+point_bonus = 0
+xp_boosts = {"Farming": 4, "Husbandry": 1, "Strength": 1}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeMildewCure", "MakeFliesCureFromCigarettes", "MakeFliesCureFromLooseTobacco", "MakeFliesCureFromChewingTobacco", "MakeAphidsCure", "MakeScarecrow", "MakeBarbedWire", "base:carrot growing season", "base:broccoli growing season", "base:radish growing season", "base:strawberry growing season", "base:tomato growing season", "base:potato growing season", "base:cabbage growing season", "base:corn growing season", "base:kale growing season", "base:sweet potato growing season", "base:green pea growing season", "base:onion growing season", "base:garlic growing season", "base:soybean growing season", "base:wheat growing season", "base:basil growing season", "base:chives growing season", "base:cilantro growing season", "base:oregano growing season", "base:parsley growing season", "base:sage growing season", "base:rosemary growing season", "base:thyme growing season", "base:barley growing season", "base:flax growing season", "base:hops growing season", "base:rye growing season", "base:sugar beet growing season", "base:tobacco growing season", "base:bell pepper growing season", "base:cauliflower growing season", "base:cucumber growing season", "base:habanero growing season", "base:jalapeno growing season", "base:leek growing season", "base:lettuce growing season", "base:pumpkin growing season", "base:spinach growing season", "base:sunflower growing season", "base:turnip growing season", "base:watermelon growing season", "base:zucchini growing season", "base:chamomile growing season", "base:lemongrass growing season", "base:marigold growing season", "base:mint growing season", "base:rose growing season", "base:poppy growing season", "base:hemp growing season", "base:lavender growing season", "base:comfrey growing season", "base:common mallow growing season", "base:broadleaf plantain growing season", "base:black sage growing season", "base:wild garlic growing season", "MakeJar")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

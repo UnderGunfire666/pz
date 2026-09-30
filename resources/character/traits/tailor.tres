@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:tailor"
+display_name = "Sewer"
+description = ""
+cost = 4
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {"Tailoring": 1}
+incompatible_trait_ids = PackedStringArray()
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("KnitBalaclavaFace", "KnitBalaclavaFull", "KnitBeany", "KnitDoily", "KnitLegwarmers", "KnitScarf", "KnitSocks", "KnitSweaterVest", "KnitWoolyHat", "SewCrudeLeatherBackpack", "SewHideBoots", "SewHidePants", "SewHideSleepingBag", "SewHideCoat", "SewHideHoodie", "SewHideJacket", "SewHideRobe", "SewHideHat", "MakeTarpChestRig", "AssembleSmallFramepack", "AssembleLargeFramepack", "AssembleAdvancedFramepack", "AssembleAdvancedLargeFramepack", "MakeGarbageBagTankTop", "MakeTarpTankTop", "MakeGarbageBagDress", "MakeTarpDress", "WeaveTwineShoes", "SewLeatherCodpiece", "SewLeatherGorget", "SewHolster", "SewHolsterDouble", "MakeWesternBoots", "SewBelt", "SewLeatherToolRoll", "SewSandals", "SewLeatherGloves", "SewLeatherWaterBag", "SewBandolier", "SewShellsBandolier", "SewHideWallet", "SewFurredHideCoat", "SewFurredHideJacket", "SewLeatherGaiter", "SewLeatherVambrace", "SewElbowPads", "SewKneePads", "SewLeatherPants", "SewHideFannyBag", "SewClothSatchel", "SewDressKnees", "SewLongjohns", "SewShirt", "SewSkirtKnees", "SewTrousers", "SewDressLong", "SewLongjohnsBottom", "SewShirtSleeveless", "SewSkirtLong")
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("recipe_unlocks", "non_skill_trait_effect:base:tailor")
+can_change_during_play = false

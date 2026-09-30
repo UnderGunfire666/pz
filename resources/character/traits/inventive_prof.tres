@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:inventive_prof"
+display_name = "Inventive"
+description = "Has lower skill level requirements to research recipes from items or auto learn recipes."
+cost = 0
+selectable = false
+profession_trait = true
+disabled_in_multiplayer = false
+xp_boosts = {}
+incompatible_trait_ids = PackedStringArray("base:inventive")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray("trait_effect:base:inventive_prof")
+can_change_during_play = false

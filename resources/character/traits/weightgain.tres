@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:weightgain"
+display_name = "Slow Metabolism"
+description = "Permanent tendency to gain weight. Starts with High Weight trait."
+cost = -2
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {}
+incompatible_trait_ids = PackedStringArray("base:weightloss")
+granted_trait_ids = PackedStringArray("base:overweight")
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray("trait_effect:base:weightgain")
+can_change_during_play = true

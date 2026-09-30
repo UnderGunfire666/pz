@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:lighteater"
+display_name = "Light Eater"
+description = "Needs to eat less regularly."
+cost = 2
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {}
+incompatible_trait_ids = PackedStringArray("base:heartyappetite", "base:obese")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray("trait_effect:base:lighteater")
+can_change_during_play = false

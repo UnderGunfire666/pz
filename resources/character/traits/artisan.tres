@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:artisan"
+display_name = "Artisan"
+description = "Better at pottery and glass crafts."
+cost = 2
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {"Glassmaking": 1, "Pottery": 1}
+incompatible_trait_ids = PackedStringArray()
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeGlassJar", "MakeGlassBottle", "MakeDrinkingGlass", "MakeWineGlass", "MakeGlassPanel", "MakeLanternGlass")
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("recipe_unlocks", "non_skill_trait_effect:base:artisan")
+can_change_during_play = false

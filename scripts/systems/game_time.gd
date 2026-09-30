@@ -7,7 +7,7 @@ extends Node
 signal speed_changed(mode_name: String, simulation_scale: float)
 signal minute_changed(total_game_minutes: int)
 
-enum SpeedMode { PAUSED, NORMAL, FAST }
+enum SpeedMode { PAUSED, NORMAL, FAST, SLEEP }
 
 const GAME_SECONDS_PER_REAL_SECOND := 24.0
 const FAST_SCALE := 3.0
@@ -36,6 +36,8 @@ func simulation_scale() -> float:
 			return 0.0
 		SpeedMode.FAST:
 			return FAST_SCALE
+		SpeedMode.SLEEP:
+			return StatusConfig.SLEEP_TIME_SCALE
 		_:
 			return 1.0
 
@@ -58,6 +60,8 @@ func speed_name() -> String:
 			return "Paused"
 		SpeedMode.FAST:
 			return "Fast-forward x%d" % int(FAST_SCALE)
+		SpeedMode.SLEEP:
+			return "Sleeping x%d" % int(StatusConfig.SLEEP_TIME_SCALE)
 		_:
 			return "Normal"
 

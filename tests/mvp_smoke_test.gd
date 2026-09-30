@@ -13,20 +13,43 @@ func _run() -> void:
 	game = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	add_child(game)
 	await get_tree().process_frame
+	game.player_state.character.select_build(game.character_catalog.rules.default_occupation_id, [])
+	game.hud.character_creation_panel.hide()
 	_disable_simulation(game)
 	GameTime.set_process(false)
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	_test_world_and_stairs()
+	ZombiePressureTests.run(game, _expect)
 	_test_structure_occlusion()
 	_test_exterior_and_props()
 	_test_room_privacy_and_visible_contents()
 	_test_visibility_and_combat()
 	_test_actions_and_inventory()
 	_test_npc_and_paths()
+	BackpackTests.run(game, _expect)
+	InventoryUpgradeTests.run(game, _expect)
+	ClothingTests.run(game, _expect)
+	PlayerStatusTests.run(game, _expect)
+	CharacterProgressionTests.run(game, _expect)
 	_test_save_and_pause()
 	game.world_3d_view._process(0.0)
 	game.hud.refresh(game)
 	if "--capture" in OS.get_cmdline_user_args() and DisplayServer.get_name() != "headless":
+		if game.inventory.contents("outer_top").is_empty():
+			for stack: ItemStack in game.inventory.world["wardrobe"].contents:
+				if stack.definition.id == "jacket":
+					game.inventory.move_unit(stack.units[0]["uid"], "outer_top")
+					break
+		_place_player(Vector2(17.5, 13.5), 0)
+		game.visibility.refresh(game.player.logical_position, Vector2.UP, false, 0)
+		game.world_3d_view.camera_distance = World3DView.CAMERA_DISTANCE_MIN
+		game.player._attack_flash_left = 0.1
+		game.world_3d_view._update_camera(0.0)
+		game.world_3d_view._process(0.0)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://.godot/mvp-clothing.png")
+		game.player._attack_flash_left = 0.0
+		game.world_3d_view.camera_distance = 19.0
 		_place_player(Vector2(4.45, 6.65), 0)
 		game.visibility.refresh(game.player.logical_position, Vector2.UP, false, 0)
 		game.world_3d_view._process(0.0)
@@ -50,6 +73,20 @@ func _run() -> void:
 			game.hud.refresh(game)
 			await RenderingServer.frame_post_draw
 			get_viewport().get_texture().get_image().save_png("res://.godot/mvp-%s.png" % sample["name"])
+		_place_player(Vector2(5.7, 7.0), 0)
+		game.world_3d_view._process(0.0)
+		game.hud.details.visible = true
+		game.hud.pack_panel.presentation.sides[0]["selected"] = "all_carried"
+		game.hud.pack_panel.presentation.sides[1]["selected"] = "test_cabinet_0"
+		game.hud.pack_panel.last_signature = ""
+		game.hud.refresh(game)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://.godot/mvp-backpack.png")
+		game.hud.details.hide()
+		game.hud.character_panel.show()
+		game.hud.character_panel.refresh(game)
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://.godot/mvp-character.png")
 	await get_tree().process_frame
 	if failures.is_empty():
 		print("MVP regression passed: %d checks." % checks)
@@ -324,8 +361,10 @@ func _test_visibility_and_combat() -> void:
 	game._on_player_attack(game.player.logical_position, Vector2.DOWN)
 	_expect(zombie.health == ZombieActor.MAX_HEALTH - 1, "directional melee damages same-floor target")
 	zombie.attack_cooldown = 0.0
+	var arm_health := float(game.player_state.body_health["Right Arm"])
 	zombie._process(0.01)
-	_expect(game.player_state.health < health, "zombie claw causes actual player damage")
+	_expect(game.player_state.body_health["Right Arm"] < arm_health and is_equal_approx(game.player_state.health, health),
+		"zombie claw damages its body region without double-charging overall health")
 	zombie.logical_position = Vector2(14.5, 4.95)
 	game.player.logical_position = Vector2(14.5, 4.25)
 	zombie.attack_cooldown = 0.0
@@ -343,6 +382,8 @@ func _test_actions_and_inventory() -> void:
 	_expect(point.get("id") == "grocery_upstairs", "upper floor has its own reachable container")
 	var container: ContainerData = point["container"]
 	game.interactions.request_interaction()
+	_expect(game.interactions.active_action.is_empty() and game.interactions.can_access(point["id"]), "viewing a reachable cabinet is immediate and needs no search")
+	game.interactions._start_container_search(point)
 	game.interactions._update_active_action(2.0)
 	var progress := container.search_progress_seconds
 	_expect(progress > 0.0, "search progress is recorded during action")
@@ -351,8 +392,8 @@ func _test_actions_and_inventory() -> void:
 	move.pressed = true
 	game._unhandled_input(move)
 	_expect(game.interactions.active_action.is_empty() and not game.player.interaction_locked, "movement intent cancels search immediately")
-	game.interactions.request_interaction()
-	_expect(is_equal_approx(game.interactions.active_action["remaining"], 360.0 - progress), "search resumes saved progress")
+	game.interactions._start_container_search(point)
+	_expect(is_equal_approx(game.interactions.active_action["remaining"], 360.0 - progress), "legacy search resumes saved progress")
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
 	game.interactions._update_active_action(5)
 	_expect(is_equal_approx(progress, container.search_progress_seconds), "pause freezes search")
@@ -360,11 +401,13 @@ func _test_actions_and_inventory() -> void:
 	game.interactions._update_active_action(1)
 	_expect(is_equal_approx(container.search_progress_seconds, progress + 72.0), "3x search advances at correct game-time rate")
 	game.interactions._update_active_action(5)
-	_expect(container.searched and not game.inventory.placements.is_empty(), "upper loot search completes and transfers supplies")
+	_expect(container.searched and not game.inventory.contents(game.inventory.default_destination()).is_empty(), "upper loot search completes and transfers supplies")
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
-	var stack: ItemStack = game.inventory.placements[0]["stack"]
+	var stack: ItemStack = game.inventory.contents(game.inventory.default_destination())[0]
 	var quantity := stack.quantity
-	game.inventory.take_first_with_tag("food")
+	game.player_state.survival.hunger = 20
+	game.interactions.request_use(game.inventory.first_with_tag("food"))
+	game.interactions._update_active_action(10.0)
 	_expect(stack.quantity == quantity - 1, "consume removes one unit, not entire stack")
 	_place_player(Vector2(8.5, 7.5), 1)
 	var wounds := game.player_state.wounds.size()
@@ -374,35 +417,37 @@ func _test_actions_and_inventory() -> void:
 	game.interactions._check_hazards()
 	_expect(game.player_state.wounds.size() == wounds + 1, "ground hazard applies one wound")
 	_place_player(Vector2(5.5, 3.5), 1)
+	game.player_state.survival.fatigue = 60.0
 	game.interactions.request_interaction()
-	_expect(game.interactions.is_resting(), "upstairs bed supports rest")
+	_expect(game.interactions.is_resting() and GameTime.speed_mode == GameTime.SpeedMode.SLEEP, "upstairs bed starts unified-time sleep fast-forward")
 	game.interactions.interrupt_action("Test injury")
 	_expect(not game.player.interaction_locked, "rest can be interrupted")
 	game.interactions.request_interaction()
 	game.interactions._update_active_action(40)
 	game.interactions.request_interaction()
-	_expect(game.interactions.is_resting(), "rest can be repeated")
+	_expect(game.interactions.is_resting(), "sleep can be repeated while still tired")
 	game.interactions.interrupt_action()
 	# Known contents must remain collectible after an initially full inventory.
 	var known: ContainerData = game.interactions.points[1]["container"]
 	known.searched = true
-	game.inventory.placements.clear()
+	game.inventory.contents(game.inventory.default_destination()).clear()
 	_place_player(Vector2(12.7, 6.5), 0)
-	game.interactions.request_interaction()
+	game.interactions.request_batch(known.id, game.inventory.default_destination())
+	game.interactions._update_active_action(30.0)
 	_expect(known.contents.is_empty() and game.inventory.current_weight() > 0, "known container leftovers can be collected")
 	var before := game.inventory.current_weight()
 	game.inventory.sort_items()
 	_expect(is_equal_approx(before, game.inventory.current_weight()), "sorting preserves all item weight")
-	game.inventory.placements.clear()
+	game.inventory.contents(game.inventory.default_destination()).clear()
 	_place_player(Vector2(4.5, 7.0), 0)
 	var test_point := game.interactions.nearest_point()
 	_expect(test_point.get("id") == "test_supply_cache", "test supply cache is reachable at spawn")
-	game.interactions.request_interaction()
+	game.interactions.request_batch(test_point["id"], game.inventory.default_destination())
 	game.interactions._update_active_action(30.0)
 	var test_container: ContainerData = test_point["container"]
-	_expect(test_container.searched and test_container.contents.is_empty(), "test cache loot transfers to backpack")
-	_expect(game.inventory.placements.size() == 3 and game.inventory.current_weight() > 0.0,
-		"test items exercise distinct inventory sizes and weights")
+	_expect(test_container.contents.is_empty(), "test cache loot transfers without a search prerequisite")
+	_expect(game.inventory.contents(game.inventory.default_destination()).size() == 11 and game.inventory.current_weight() > 0.0,
+		"test cache provides food, tools, and six medical treatment types")
 
 
 func _test_npc_and_paths() -> void:
@@ -428,11 +473,11 @@ func _test_npc_and_paths() -> void:
 	_expect(game.npc.floor_level == 1 and game.npc.logical_position.distance_to(game.npc.home_position) < 0.2, "NPC follows stairs to upstairs home (at %s F%d stair=%s)" % [game.npc.logical_position, game.npc.floor_level, game.npc.stair_id])
 	game.npc.survival.hunger = 90
 	game.npc.survival.thirst = 90
-	game.npc.survival.fatigue = 70
+	game.npc.survival.fatigue = 50
 	game.npc._choose_goal()
 	var fatigue := game.npc.survival.fatigue
 	game.npc._process(1.0)
-	_expect(game.npc.survival.fatigue < fatigue, "NPC actually recovers fatigue at upstairs home")
+	_expect(game.npc.survival.fatigue > fatigue, "NPC actually recovers fatigue reserve at upstairs home")
 	var zombie := game.zombie_spawner._spawn(Vector2(13.5, 9.5), 0)
 	zombie.target_position = Vector2(14.5, 6.5)
 	zombie.target_floor = 2
@@ -461,9 +506,9 @@ func _test_npc_and_paths() -> void:
 	zombie.logical_position = link.start + link.direction() * 0.25
 	zombie.stair_id = link.id
 	zombie.attack_cooldown = 0.0
-	var health := game.player_state.health
+	var arm_health := float(game.player_state.body_health["Right Arm"])
 	zombie._process(0.0)
-	_expect(game.player_state.health < health, "zombie can attack player on same stair, no stair invulnerability")
+	_expect(game.player_state.body_health["Right Arm"] < arm_health, "zombie can injure player on same stair, no stair invulnerability")
 	game.zombie_spawner.clear_population()
 
 
@@ -478,6 +523,9 @@ func _test_save_and_pause() -> void:
 	zombie.target_position = Vector2(5.5, 3.5)
 	zombie.target_floor = 1
 	zombie.has_target = true
+	zombie.awareness = ZombieActor.Awareness.SOUND
+	zombie.sound_memory_expires_at = GameTime.elapsed_game_seconds + 42.0
+	zombie.last_stimulus_time = GameTime.elapsed_game_seconds
 	var data := QuickSave.snapshot(game)
 	_expect(QuickSave.validate(data, game), "snapshot schema accepts a real stair traversal state")
 	var invalid := data.duplicate(true)
@@ -492,6 +540,10 @@ func _test_save_and_pause() -> void:
 	_expect(game.player.logical_position.is_equal_approx(saved_position) and game.player.stair_id == link.id, "load restores mid-stair position and connector")
 	_expect(game.zombie_spawner.active_zombies.size() == 1 and game.zombie_spawner.active_zombies[0].stair_id == link.id, "load restores zombie in stair opening rather than dropping it")
 	zombie = game.zombie_spawner.active_zombies[0]
+	_expect(zombie.awareness == ZombieActor.Awareness.SOUND
+		and is_equal_approx(zombie.sound_memory_expires_at, GameTime.elapsed_game_seconds + 42.0)
+		and game.zombie_spawner.initial_population_count == data["population"]["initial_count"],
+		"save/load preserves zombie stimulus memory and finite population ledger without duplication")
 	for step in range(500):
 		zombie._move_toward_target(0.08)
 		if zombie.floor_level == 1 and zombie.logical_position.distance_to(zombie.target_position) < 0.2:
@@ -505,8 +557,8 @@ func _test_save_and_pause() -> void:
 	game.zombie_spawner.clear_population()
 	game.player.stair_id = ""
 	_place_player(Vector2(4.45, 6.65), 0)
-	game.player_state.add_wound("Scratch", "arm", 1.0, true)
-	_expect(game.player_state.is_dead(), "repeated damage has terminal player consequence")
+	game.player_state.add_wound("Bite", "Torso", 100.0, true, 0.0)
+	_expect(game.player_state.is_dead(), "torso region reaching zero has a terminal consequence")
 	_expect(not "virus" in game.player_state.visible_wound_summary(), "wound UI does not disclose zombie-virus state")
 	game.player_state.health = PlayerState.MAX_HEALTH
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)

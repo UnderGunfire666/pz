@@ -13,6 +13,7 @@ var viewer_floor := 0
 var visible_world_polygon := PackedVector2Array()
 var vision_radius := 0.0
 var half_fov_radians := 0.0
+var perception_multiplier := 1.0
 const SELF_VISION_RADIUS := 1.2
 const FOV_RAY_COUNT := 256
 var revision := 0
@@ -24,7 +25,8 @@ func setup(p_world_map: WorldMap) -> void:
 	world_map = p_world_map
 
 
-func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next_aim_mode: bool, next_floor: int = 0) -> void:
+func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next_aim_mode: bool,
+		next_floor: int = 0, next_perception_multiplier: float = 1.0) -> void:
 	if world_map == null:
 		return
 	var next_facing := next_facing_direction.normalized() if next_facing_direction.length_squared() > 0.001 else Vector2.DOWN
@@ -33,6 +35,7 @@ func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next
 		and facing_direction.dot(next_facing) > 0.999
 		and aim_mode == next_aim_mode
 		and viewer_floor == next_floor
+		and is_equal_approx(perception_multiplier, next_perception_multiplier)
 		and _room_at(viewer_position, viewer_floor) == _room_at(next_viewer_position, next_floor)
 		and _last_world_revision == world_map.revision
 		and absf(_last_light - world_map.ambient_light()) < 0.005
@@ -43,6 +46,7 @@ func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next
 	facing_direction = next_facing
 	aim_mode = next_aim_mode
 	viewer_floor = next_floor
+	perception_multiplier = clampf(next_perception_multiplier, 0.25, 1.0)
 	_last_world_revision = world_map.revision
 	_last_light = world_map.ambient_light()
 	visible_tiles.clear()
@@ -51,7 +55,7 @@ func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next
 	visible_tiles[viewer_key] = true
 	seen_tiles[viewer_key] = true
 
-	vision_radius = 6.6 * lerpf(0.55, 1.0, world_map.ambient_light())
+	vision_radius = 6.6 * lerpf(0.55, 1.0, world_map.ambient_light()) * perception_multiplier
 	half_fov_radians = deg_to_rad(68.0)
 	for y in range(WorldMap.HEIGHT):
 		for x in range(WorldMap.WIDTH):

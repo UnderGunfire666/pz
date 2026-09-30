@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:unemployed"
+display_name = "Custom Occupation"
+description = "Use free trait points to make a custom build for your character."
+point_bonus = 8
+xp_boosts = {}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray()

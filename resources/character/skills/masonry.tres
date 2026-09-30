@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SkillDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "Masonry"
+display_name = "Masonry"
+category = "Crafting"
+max_level = 10
+xp_per_level = PackedFloat32Array(75, 150, 300, 750, 1500, 3000, 4500, 6000, 7500, 9000)
+passive = false
+physical_attribute = false

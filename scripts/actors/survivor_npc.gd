@@ -33,6 +33,7 @@ func setup(p_world_map: WorldMap, start_position: Vector2) -> void:
 	brain.traits.set_value("resourcefulness", 0.45)
 	brain.relationships["player"] = 0.0
 	brain.remember("The outbreak began this morning.")
+	add_to_group("zombie_targets")
 	NoiseBus.noise_emitted.connect(hear_noise)
 
 
@@ -224,8 +225,9 @@ func _nearest_zombie() -> ZombieActor:
 	return nearest
 
 
-func hear_noise(noise_position: Vector2, radius: float, category: String, noise_floor: int = 0) -> void:
-	if world_map.sound_cost(logical_position, floor_level, noise_position, noise_floor) <= radius:
-		brain.remember("Heard %s nearby." % category)
-		brain.last_noise_position = noise_position
-		brain.last_noise_floor = noise_floor
+func hear_noise(stimulus: NoiseStimulus) -> void:
+	if GameTime.simulation_scale() <= 0.0: return
+	if world_map.sound_cost(logical_position, floor_level, stimulus.world_position, stimulus.floor_level) <= stimulus.audible_range * stimulus.loudness:
+		brain.remember("Heard %s nearby." % stimulus.event_type)
+		brain.last_noise_position = stimulus.world_position
+		brain.last_noise_floor = stimulus.floor_level

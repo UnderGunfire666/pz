@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:electrician"
+display_name = "Electrician"
+description = "Can operate generators."
+point_bonus = -2
+xp_boosts = {"Electricity": 5}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("Generator", "MakeRemoteControllerV1", "MakeRemoteControllerV2", "MakeRemoteControllerV3", "MakeRemoteTrigger", "MakeTimer", "CraftMakeshiftRadio", "CraftMakeshiftHAMRadio", "CraftMakeshiftWalkieTalkie", "MakeImprovisedFlashlight", "MakeImprovisedLantern", "MakeImprovisedLighter")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:carpenter"
+display_name = "Carpenter"
+description = ""
+point_bonus = -2
+xp_boosts = {"Woodwork": 4, "Carving": 1, "SmallBlunt": 1, "Masonry": 1, "Maintenance": 1}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeBrakeWeapon", "CanReinforceLongWeapon", "CanReinforceShortWeapon", "CanReinforceWeapon", "MakeGardenForkHeadWeapon", "RailspikeBaseballBat", "MakeRailspikeCudgel", "MakeRailspikeLongHandle", "MakeRakeHeadWeapon", "MakeSawPlank", "MakeSawbladeCudgel", "MakeSawbladeLongHandle", "MakeSawbladePlank", "MakeSawbladeTableLeg", "MakeSawbladeWeapon", "SheetMetalWeapon", "MakeSpadeHeadCudgel", "MakeAdvancedFramepackFrame", "MakeAdvancedLargeFramepackFrame")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="ZombieWorldRules" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/zombie_world_rules.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+initial_population_cap = 7
+sight_range = 4.8
+peripheral_range = 1.25
+sight_half_angle_degrees = 72.0
+perception_interval_game_seconds = 1.5
+visual_memory_game_seconds = 90.0
+sound_memory_game_seconds = 55.0
+search_game_seconds = 35.0
+stimulus_switch_lock_game_seconds = 6.0
+migration_interval_game_minutes = 30.0
+migration_player_exclusion_radius = 7.0
+convergence_radius = 4.5
+maximum_loose_group_size = 5

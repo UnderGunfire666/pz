@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:blacksmith2"
+display_name = "Blacksmith Knowledge"
+description = "Can use an anvil to create metal items."
+cost = 0
+selectable = false
+profession_trait = true
+disabled_in_multiplayer = false
+xp_boosts = {}
+incompatible_trait_ids = PackedStringArray("base:blacksmith")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray("trait_effect:base:blacksmith2")
+can_change_during_play = false

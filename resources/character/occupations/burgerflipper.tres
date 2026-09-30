@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:burgerflipper"
+display_name = "Burger Flipper"
+description = ""
+point_bonus = 2
+xp_boosts = {"Cooking": 2, "Maintenance": 1, "SmallBlade": 1}
+granted_trait_ids = PackedStringArray("base:cook2")
+granted_recipe_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray()

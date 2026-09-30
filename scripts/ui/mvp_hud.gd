@@ -10,12 +10,19 @@ var floor_label: Label
 var detail_label: Label
 var details: PanelContainer
 var help_panel: PanelContainer
-var pack_grid: GridContainer
+var pack_panel: BackpackPanel
+var character_panel: CharacterStatusPanel
+var character_creation_panel: CharacterCreationPanel
 var world_view: World3DView
 var pause_button: Button
 var normal_button: Button
 var fast_button: Button
 var _last_inventory := ""
+var action_row: HBoxContainer
+var action_bar: ProgressBar
+var action_label: Label
+var _game: MVPGameRoot
+var drop_surface: InventoryDropSurface
 
 
 func _ready() -> void:
@@ -23,6 +30,11 @@ func _ready() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	drop_surface = InventoryDropSurface.new()
+	drop_surface.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	drop_surface.mouse_filter = Control.MOUSE_FILTER_PASS
+	drop_surface.hide()
+	root.add_child(drop_surface)
 	var top := _panel(root)
 	top.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 	top.offset_left = 10
@@ -40,22 +52,34 @@ func _ready() -> void:
 	fast_button = _button(bar, "3x", func() -> void: GameTime.set_speed(GameTime.SpeedMode.FAST), true)
 	_button(bar, "+", func() -> void: adjust_zoom(1.12))
 	_button(bar, "−", func() -> void: adjust_zoom(1.0 / 1.12))
-	_button(bar, "Pack / health", func() -> void: details.visible = not details.visible)
+	_button(bar, "Inventory", toggle_inventory)
+	_button(bar, "Character [C]", toggle_character_panel)
 	_button(bar, "Help", func() -> void: help_panel.visible = not help_panel.visible)
 	status_label = _label(rows, 14)
 
 	details = _panel(root)
 	details.position = Vector2(10, 90)
-	details.custom_minimum_size = Vector2(310, 0)
+	details.custom_minimum_size = Vector2(800, 0)
 	details.visible = false
 	var content := VBoxContainer.new()
 	details.add_child(content)
 	detail_label = _label(content, 14)
 	detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	detail_label.custom_minimum_size.x = 290
-	pack_grid = GridContainer.new()
-	pack_grid.columns = 6
-	content.add_child(pack_grid)
+	detail_label.custom_minimum_size.x = 780
+	pack_panel = BackpackPanel.new()
+	content.add_child(pack_panel)
+	drop_surface.panel = pack_panel
+	details.visibility_changed.connect(func() -> void: drop_surface.visible = details.visible)
+	character_panel = CharacterStatusPanel.new()
+	character_panel.position = Vector2(220, 90)
+	character_panel.custom_minimum_size = Vector2(840, 0)
+	character_panel.visible = false
+	root.add_child(character_panel)
+	character_creation_panel = CharacterCreationPanel.new()
+	character_creation_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	character_creation_panel.position = Vector2(-450, -285)
+	character_creation_panel.custom_minimum_size = Vector2(900, 570)
+	root.add_child(character_creation_panel)
 
 	help_panel = _panel(root)
 	help_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
@@ -64,7 +88,7 @@ func _ready() -> void:
 	help_panel.offset_top = 90
 	help_panel.visible = false
 	help_label = _label(help_panel, 14)
-	help_label.text = ("WASD move · Shift sprint\nRMB aim · LMB attack · E interact\nF eat · V drink · R sort · Esc cancel action\nMMB drag rotate · Wheel zoom\nSpace pause · 1 normal · 2 fast-forward\nWalk into a stair landing to go up/down.\nF5 quick save · F9 load (paused)\nAfter death: Enter starts a new run.")
+	help_label.text = ("WASD move · Shift sprint\nRMB aim · LMB attack · E interact · Tab inventory · C character\nF eat · V drink · R sort · Esc cancel action\nMMB drag rotate · Wheel zoom\nSpace pause · 1 normal · 2 fast-forward\nWalk into a stair landing to go up/down.\nF5 quick save · F9 load (paused)\nAfter death: Enter starts a new run.")
 
 	var bottom := _panel(root)
 	bottom.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -74,6 +98,16 @@ func _ready() -> void:
 	bottom.offset_bottom = -10
 	var messages := VBoxContainer.new()
 	bottom.add_child(messages)
+	action_row = HBoxContainer.new()
+	messages.add_child(action_row)
+	action_label = _label(action_row, 14)
+	action_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_bar = ProgressBar.new()
+	action_bar.custom_minimum_size = Vector2(160, 18)
+	action_row.add_child(action_bar)
+	_button(action_row, "×", func() -> void:
+		if _game != null: _game.interactions.interrupt_action("Cancelled"))
+	action_row.visible = false
 	objective_label = _label(messages, 14)
 	prompt_label = _label(messages, 15)
 	notification_label = _label(messages, 14)
@@ -111,9 +145,21 @@ func _button(parent: Node, text: String, callback: Callable, toggle: bool = fals
 
 func setup(p_view: World3DView) -> void:
 	world_view = p_view
+	call_deferred("_setup_character_creation")
+
+func _setup_character_creation() -> void:
+	if _game != null: character_creation_panel.setup(_game)
 
 
 func refresh(game: MVPGameRoot) -> void:
+	_game = game
+	if character_creation_panel._game == null: character_creation_panel.setup(game)
+	if not game.interactions.container_view_requested.is_connected(_view_container):
+		game.interactions.container_view_requested.connect(_view_container)
+	action_row.visible = not game.interactions.active_action.is_empty()
+	if action_row.visible:
+		action_label.text = game.interactions.active_action["label"]
+		action_bar.value = game.interactions.action_progress() * 100.0
 	var tile := game.world_map.get_tile(game.player.logical_position, game.player.floor_level)
 	var place := "Outdoors"
 	if tile != null and not tile.building_id.is_empty():
@@ -125,14 +171,17 @@ func refresh(game: MVPGameRoot) -> void:
 	var display_floor := game.world_map.display_floor_at(game.player.logical_position, game.player.floor_level, game.player.stair_id)
 	floor_label.text = "%s · %s · Floor %d%s" % [GameTime.formatted_time(), place, display_floor + 1, stair_text]
 	var needs := game.player_state.survival
-	status_label.text = "Health %d · Hunger %d · Thirst %d · Fatigue %d · Stamina %d · Stress %d   |   %.1f / %.1f kg" % [
+	status_label.text = "Health %d · Hunger %d · Thirst %d · Fatigue %d · Stamina %d   |   %.1f / %.1f kg" % [
 		game.player_state.health, needs.hunger, needs.thirst, needs.fatigue, needs.stamina,
-		game.world_map.stress_at(game.player.logical_position, game.local_zombie_count(), game.player.floor_level),
-		game.inventory.current_weight(), game.inventory.max_weight]
-	detail_label.text = "Wound: %s\n%s\nPack 6 × 4 · F eat · V drink · R sort" % [
+		game.inventory.current_weight(), game.inventory.absolute_limit]
+	status_label.text += " · penalty %.1f kg  %s" % [game.inventory.penalty_limit, _status_icons(game.player_state)]
+	status_label.modulate = Color(1, 0.35, 0.3) if game.inventory.current_weight() >= game.inventory.absolute_limit * 0.9 else (Color(1, 0.75, 0.3) if game.inventory.current_weight() > game.inventory.penalty_limit else Color.WHITE)
+	detail_label.text = "Wound: %s\n%s\nF eat · V drink · R sort" % [
 		game.player_state.visible_wound_summary(), game.inventory.summary()]
 	if details.visible:
-		_refresh_pack(game.inventory)
+		pack_panel.refresh(game)
+	if character_panel.visible:
+		character_panel.refresh(game)
 	objective_label.text = game.objective_text()
 	prompt_label.text = game.interactions.prompt()
 	notification_label.text = game.notification
@@ -145,30 +194,46 @@ func refresh(game: MVPGameRoot) -> void:
 		button.disabled = game.player_state.is_dead()
 
 
-func _refresh_pack(inventory: InventoryGrid) -> void:
-	var signature := inventory.summary() + str(inventory.placements)
-	if signature == _last_inventory:
-		return
-	_last_inventory = signature
-	for child in pack_grid.get_children():
-		pack_grid.remove_child(child)
-		child.queue_free()
-	for y in range(inventory.grid_size.y):
-		for x in range(inventory.grid_size.x):
-			var slot := Vector2i(x, y)
-			var label := Label.new()
-			label.custom_minimum_size = Vector2(42, 24)
-			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			label.text = "·"
-			for placement in inventory.placements:
-				var item: ItemStack = placement["stack"]
-				if Rect2i(placement["slot"], item.definition.grid_size).has_point(slot):
-					label.text = item.definition.display_name.left(1)
-					label.tooltip_text = item.label()
-					label.modulate = Color("85cce9")
-			pack_grid.add_child(label)
-
-
 func adjust_zoom(factor: float) -> void:
 	if world_view != null:
 		world_view.set_zoom_factor(clampf(factor, 0.5, 2.0))
+
+func _status_icons(state: PlayerState) -> String:
+	var entries: Array[String] = []
+	for data in [
+		["🍽", state.survival.hunger, true], ["💧", state.survival.thirst, true],
+		["☾", state.survival.fatigue, true], ["⚡", state.survival.stamina, true],
+		["✚", state.pain, false], ["!", state.panic, false], ["≈", state.stress, false],
+		["…", state.boredom, false], ["☹", state.unhappiness, false]]:
+		var tier := StatusConfig.severity_tier(data[1], data[2])
+		if tier > 0: entries.append("%s%d" % [data[0], tier])
+	var temperature_tier := state.temperature_tier()
+	if temperature_tier > 0: entries.append("%s%d" % ["♨" if state.core_temperature > StatusConfig.NORMAL_BODY_TEMPERATURE else "❄", temperature_tier])
+	return " ".join(entries)
+
+
+func toggle_inventory() -> void:
+	details.visible = not details.visible
+	if details.visible: character_panel.hide()
+
+
+func toggle_character_panel() -> void:
+	character_panel.visible = not character_panel.visible
+	if character_panel.visible:
+		details.hide()
+		help_panel.hide()
+		if _game != null: character_panel.refresh(_game)
+
+
+func pointer_over_page(screen_position: Vector2) -> bool:
+	for panel: Control in [details, character_panel, character_creation_panel]:
+		if panel.visible and panel.get_global_rect().has_point(screen_position): return true
+	return false
+
+func _view_container(id: String) -> void:
+	character_panel.hide()
+	details.show()
+	pack_panel.presentation.sides[1]["selected"] = "ground" if id.begins_with("dropped_") else id
+	pack_panel.last_signature = ""
+	pack_panel.refresh(_game)
+	pack_panel.presentation.save_preferences()

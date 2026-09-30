@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:burglar"
+display_name = "Burglar"
+description = ""
+point_bonus = -6
+xp_boosts = {"Nimble": 2, "Sneak": 2, "Lightfoot": 2}
+granted_trait_ids = PackedStringArray("base:burglar")
+granted_recipe_ids = PackedStringArray("MakeForearmMagazineArmor", "MakeBodyMagazineArmor", "MakeGlassShiv", "MakeShiv", "MakeToothbrushShiv", "CopyBuildingKey", "MakeHollowBook", "MakeForearmBulletproofVestArmor", "MakeShinBulletproofVestArmor", "MakeThighBulletproofVestArmor", "base:hemp growing season", "MakeScrewdriver", "MakeBlankID", "MakeImprovisedLighter")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

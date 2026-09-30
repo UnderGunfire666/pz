@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SkillDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "Fitness"
+display_name = "Fitness"
+category = "Attributes"
+max_level = 10
+xp_per_level = PackedFloat32Array(1500, 3000, 6000, 9000, 18000, 30000, 60000, 90000, 120000, 150000)
+passive = true
+physical_attribute = true

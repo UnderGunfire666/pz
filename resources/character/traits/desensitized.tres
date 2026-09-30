@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:desensitized"
+display_name = "Desensitized"
+description = "Far less prone to panic. Ignore discomfort."
+cost = 0
+selectable = false
+profession_trait = true
+disabled_in_multiplayer = false
+xp_boosts = {}
+incompatible_trait_ids = PackedStringArray("base:adrenalinejunkie", "base:agoraphobic", "base:brave", "base:claustrophobic", "base:cowardly", "base:hemophobic")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray("trait_effect:base:desensitized")
+can_change_during_play = false

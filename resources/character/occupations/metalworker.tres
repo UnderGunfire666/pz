@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:metalworker"
+display_name = "Welder"
+description = "Can weld foraged metal to create items and barricades."
+point_bonus = -4
+xp_boosts = {"MetalWelding": 4}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeMetalSheet", "MakeSmallMetalSheet", "MakeScrapMetalHelmet", "MakeScrapMetalShoulderArmor", "MakeScrapMetalThighArmor", "MakeScrapMetalBodyArmor", "SpikeArmorWelding", "Drill_Draw_Plate", "Drill_Heading_Tool", "MetalWallLvl1", "MetalWallLvl2", "MetalDoorFrameLvl1", "MetalWindowFrameLvl1", "MetalWindowFrameLvl2", "MetalWallFrame", "MetalDoorFrameLvl2", "Metal_Stairs", "Metal_Counter_Lvl1", "Metal_Counter_Lvl2", "Metal_CounterCorner_Lvl1", "Metal_CounterCorner_Lvl2", "Metal_Crate_Lvl1", "Metal_Crate_Lvl2", "Metal_LockerBig_Lvl1", "Metal_LockerBig_Lvl2", "Metal_LockerSmall_Lvl1", "Metal_LockerSmall_Lvl2", "Metal_Shelves_Lvl1", "Metal_Shelves_Lvl2", "MetalPoleFenceGate", "MetalPoleFenceGateSmall", "MetalWireFenceGate", "MetalWireFenceGateSmall", "MetalFenceLvl1", "MetalFenceLvl2", "MetalSmallWireFence")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

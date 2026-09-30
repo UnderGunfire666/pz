@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:fisherman"
+display_name = "Fishing Guide"
+description = ""
+point_bonus = -2
+xp_boosts = {"Fishing": 3, "PlantScavenging": 1, "Butchering": 1}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeFishingRod", "FixFishingRod", "GetWireBack", "MakeFishingNet", "MakeChum")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:engineer"
+display_name = "Engineer"
+description = "Can make traps and explosives.Can operate generators."
+point_bonus = -4
+xp_boosts = {"Electricity": 1, "Woodwork": 1, "Masonry": 1}
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("MakeAerosolBomb", "MakeFlameBomb", "MakePipeBomb", "MakeNoiseMaker", "MakeSmokeBomb", "MakeFirecracker", "MakeCraftedGasMaskFilter", "MakeImprovisedGasMask", "RechargeFilters", "MakeImprovisedFlashlight", "MakeImprovisedLantern", "MakeImprovisedLighter", "Generator")
+pending_effect_ids = PackedStringArray("recipe_unlocks")

@@ -14,6 +14,7 @@ var _navigation := AStar3D.new()
 var _nav_points: Dictionary = {}
 var _floor_node_ids: Dictionary = {}
 var _stair_node_pairs: Array[Vector2i] = []
+var _zombie_areas := ZombieAreaCatalog.new()
 
 
 func _ready() -> void:
@@ -28,10 +29,11 @@ func _build_demo_map() -> void:
 	for y in range(HEIGHT):
 		for x in range(WIDTH):
 			var road := y == 7 or x == 8
-			floors[0].tiles[Vector2i(x, y)] = WorldTileData.new("road" if road else "grass", true, 0.26 if road else 0.12)
-	_make_building("safehouse", "Miller House", Rect2i(2, 2, 5, 4), Vector2i(4, 5), 2, 0.22, true)
-	_make_building("corner_store", "Corner Grocery", Rect2i(10, 2, 7, 7), Vector2i(13, 8), 3, 0.82)
-	_make_building("neighbour_house", "Neighbour House", Rect2i(2, 9, 4, 3), Vector2i(3, 11), 2, 0.34)
+			floors[0].tiles[Vector2i(x, y)] = WorldTileData.new("road" if road else "grass", true,
+				_area_pressure("roads" if road else "outskirts"))
+	_make_building("safehouse", "Miller House", Rect2i(2, 2, 5, 4), Vector2i(4, 5), 2, _area_pressure("safehouse"), true)
+	_make_building("corner_store", "Corner Grocery", Rect2i(10, 2, 7, 7), Vector2i(13, 8), 3, _area_pressure("corner_store"))
+	_make_building("neighbour_house", "Neighbour House", Rect2i(2, 9, 4, 3), Vector2i(3, 11), 2, _area_pressure("neighbour_house"))
 	_add_stair("safehouse_0_1", "safehouse", Vector2(3.25, 4.5), Vector2(5.75, 4.5), 0, 1, 0.72)
 	_add_stair("neighbour_0_1", "neighbour_house", Vector2(2.7, 9.7), Vector2(5.3, 9.7), 0, 1, 0.72)
 	_add_stair("grocery_0_1", "corner_store", Vector2(11.25, 7.25), Vector2(11.25, 3.75), 0, 1)
@@ -41,6 +43,11 @@ func _build_demo_map() -> void:
 	_add_wall(Vector2(14.0, 2.18), Vector2(14.0, 4.0), "corner_store", 2)
 	_build_navigation()
 	revision += 1
+
+
+func _area_pressure(id: String) -> float:
+	var definition := _zombie_areas.area(id)
+	return definition.pressure if definition != null else 0.0
 
 
 func _make_building(id: String, title: String, bounds: Rect2i, door: Vector2i,
@@ -210,6 +217,13 @@ func has_line_of_sight(from: Vector2, to: Vector2, level: int = 0, to_floor: int
 func pressure_at(pos: Vector2, level: int = 0) -> float:
 	var tile := get_tile(pos, level)
 	return tile.zombie_pressure if tile != null else 0.0
+
+
+func zombie_area_id_at(pos: Vector2, level: int = 0) -> String:
+	var tile := get_tile(pos, level)
+	if tile == null: return ""
+	if not tile.building_id.is_empty(): return tile.building_id
+	return "roads" if tile.kind == "road" else "outskirts"
 
 
 func stress_at(pos: Vector2, nearby_zombies: int = 0, level: int = 0) -> float:

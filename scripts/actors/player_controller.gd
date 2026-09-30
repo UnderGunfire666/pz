@@ -29,6 +29,7 @@ func setup(p_world_map: WorldMap, p_state: PlayerState, start_position: Vector2)
 	world_map = p_world_map
 	state = p_state
 	logical_position = start_position
+	add_to_group("zombie_targets")
 
 
 func _process(delta: float) -> void:
@@ -36,7 +37,7 @@ func _process(delta: float) -> void:
 	if world_map == null or state.is_dead():
 		return
 	var simulation_scale := GameTime.simulation_scale()
-	aim_mode = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+	aim_mode = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and get_viewport().gui_get_hovered_control() == null
 	_attack_cooldown_left = maxf(0.0, _attack_cooldown_left - delta * simulation_scale)
 	_attack_flash_left = maxf(0.0, _attack_flash_left - delta)
 
@@ -48,13 +49,14 @@ func _process(delta: float) -> void:
 		action_intent.emit()
 	if not interaction_locked and move_input.length_squared() > 0.001 and simulation_scale > 0.0:
 		move_input = world_view.input_to_logical(move_input.normalized())
-		var speed := WALK_SPEED
+		var speed := WALK_SPEED * state.movement_multiplier()
 		var sprinting := Input.is_key_pressed(KEY_SHIFT) and state.survival.can_sprint()
 		if sprinting:
 			speed *= SPRINT_MULTIPLIER
 			_last_exertion = 1.0
 		else:
 			_last_exertion = 0.22
+		_last_exertion *= state.exertion_multiplier()
 		var movement := move_input * speed * delta * simulation_scale
 		var previous_position := logical_position
 		var result := world_map.move_actor(logical_position, floor_level, movement, stair_id)
@@ -90,8 +92,9 @@ func try_attack() -> void:
 		return
 	if state.survival.stamina < ATTACK_STAMINA_COST:
 		return
-	state.survival.stamina -= ATTACK_STAMINA_COST
-	_attack_cooldown_left = ATTACK_COOLDOWN
+	var performance := state.attack_performance()
+	state.survival.stamina = maxf(0.0, state.survival.stamina - ATTACK_STAMINA_COST / maxf(0.25, performance))
+	_attack_cooldown_left = ATTACK_COOLDOWN / maxf(0.25, performance)
 	_attack_flash_left = 0.18
 	attack_requested.emit(logical_position, facing_direction)
 	NoiseBus.emit_noise(logical_position, 4.4, "melee strike", floor_level)

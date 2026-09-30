@@ -2,14 +2,22 @@ class_name QuickSave
 extends RefCounted
 
 ## A single versioned local slot. Only primitive Variant data is decoded.
-## In-flight player actions are cancelled; per-container search progress survives.
-const VERSION := 1
-const PATH := "user://afterlight_mvp_v1.save"
+## Pack steps resume from saved progress; other actions stop with search progress retained.
+const VERSION := 7
+const PATH := "user://afterlight_mvp_v7.save"
+const LEGACY_PATH := "user://afterlight_mvp_v6.save"
+const LEGACY_PATH_V5 := "user://afterlight_mvp_v5.save"
+const LEGACY_PATH_V4 := "user://afterlight_mvp_v4.save"
+const LEGACY_PATH_V3 := "user://afterlight_mvp_v3.save"
 
 
 static func save_game(game: MVPGameRoot, path: String = PATH) -> bool:
-	game.interactions.interrupt_action("Saved")
+	if game.interactions.active_action.get("kind") != "pack":
+		game.interactions.interrupt_action("Saved")
 	var data := snapshot(game)
+	if not validate(data, game):
+		game.show_notification("Current state is invalid; previous save retained.")
+		return false
 	var temp_path := path + ".tmp"
 	var file := FileAccess.open(temp_path, FileAccess.WRITE)
 	if file == null:
@@ -31,6 +39,11 @@ static func save_game(game: MVPGameRoot, path: String = PATH) -> bool:
 
 
 static func load_game(game: MVPGameRoot, path: String = PATH) -> bool:
+	if path == PATH and not FileAccess.file_exists(path):
+		if FileAccess.file_exists(LEGACY_PATH): path = LEGACY_PATH
+		elif FileAccess.file_exists(LEGACY_PATH_V5): path = LEGACY_PATH_V5
+		elif FileAccess.file_exists(LEGACY_PATH_V4): path = LEGACY_PATH_V4
+		elif FileAccess.file_exists(LEGACY_PATH_V3): path = LEGACY_PATH_V3
 	if not FileAccess.file_exists(path):
 		game.show_notification("No quick save yet. Press F5 to save.")
 		return false
@@ -51,7 +64,7 @@ static func load_game(game: MVPGameRoot, path: String = PATH) -> bool:
 static func snapshot(game: MVPGameRoot) -> Dictionary:
 	var containers: Array = []
 	for point in game.interactions.points:
-		var entry := {"id": point["id"]}
+		var entry := {"id": point["id"], "position": point["position"], "floor": point["floor"], "label": point["label"]}
 		if point.has("container"):
 			var container: ContainerData = point["container"]
 			entry.merge({"searched": container.searched, "progress": container.search_progress_seconds,
@@ -59,9 +72,11 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		if point.has("triggered"):
 			entry["triggered"] = point["triggered"]
 		containers.append(entry)
-	var inventory: Array = []
-	for placement in game.inventory.placements:
-		inventory.append({"stack": _pack_item(placement["stack"]), "slot": placement["slot"]})
+	var inventory := {"loose": _pack_items(game.inventory.loose), "equipment": _pack_items(game.inventory.equipment),
+		"use_context": game.inventory.use_context.duplicate(true)}
+	inventory["strength"] = game.inventory.strength
+	for root in InventoryGrid.ROOTS:
+		if not inventory.has(root): inventory[root] = _pack_items(game.inventory.contents(root))
 	var zombies: Array = []
 	for zombie: ZombieActor in game.zombie_spawner.active_zombies:
 		if not is_instance_valid(zombie) or zombie.health <= 0 or zombie.is_queued_for_deletion():
@@ -69,7 +84,7 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		var entry := _actor_data(zombie)
 		entry.merge({"health": zombie.health, "target": zombie.target_position,
 			"target_floor": zombie.target_floor, "has_target": zombie.has_target,
-			"cooldown": zombie.attack_cooldown})
+			"cooldown": zombie.attack_cooldown, "perception": zombie.perception_save_data()})
 		zombies.append(entry)
 	var npc_data := _actor_data(game.npc)
 	npc_data["survival"] = _survival_data(game.npc.survival)
@@ -79,21 +94,28 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		"player": _actor_data(game.player), "facing": game.player.facing_direction,
 		"health": game.player_state.health, "survival": _survival_data(game.player_state.survival),
 		"wounds": game.player_state.wounds.duplicate(true),
-		"traits": game.player_state.traits.to_save_data(),
-		"virus_exposure": game.player_state.zombie_virus_exposure,
-		"virus_progress": game.player_state.zombie_virus_infection_progress,
+		"player_status": game.player_state.to_save_data(),
+		"character": game.player_state.character.to_save_data(),
+		"pack_action": game.interactions.active_action.duplicate(true) if game.interactions.active_action.get("kind") == "pack" else {},
+		"pack_queue": game.interactions.pack_queue.duplicate(true),
 		"inventory": inventory, "points": containers, "zombies": zombies, "npc": npc_data,
 		"seen": game.visibility.seen_tiles.duplicate(), "milestones": game.milestones.duplicate(),
 		"rest_origin": game.rest_origin, "rest_floor": game.rest_floor,
 		"encountered": game.encountered_zombie, "encounter_origin": game.encounter_origin,
-		"respawn": game.zombie_spawner.respawn_game_seconds}
+		"population": {"initialized": game.zombie_spawner.population_initialized,
+			"initial_count": game.zombie_spawner.initial_population_count,
+			"migration_elapsed": game.zombie_spawner.migration_game_seconds}}
 
 
 static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
+	if data.get("version") == 3: data = _migrate_v3(data)
+	if data.get("version") == 4: data = _migrate_v4(data)
+	if data.get("version") == 5: data = _migrate_v5(data)
+	if data.get("version") == 6: data = _migrate_v6(data)
 	# Validate the entire snapshot before replacing live state.
 	var required := ["version", "clock", "player", "facing", "health", "survival", "wounds",
-		"traits", "virus_exposure", "virus_progress", "inventory", "points", "zombies", "npc",
-		"seen", "milestones", "rest_origin", "rest_floor", "encountered", "encounter_origin", "respawn"]
+		"character", "player_status", "inventory", "points", "zombies", "npc",
+		"seen", "milestones", "rest_origin", "rest_floor", "encountered", "encounter_origin", "population"]
 	for key in required:
 		if not data.has(key):
 			return false
@@ -103,27 +125,29 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		return false
 	if not _valid_survival(data["survival"]) or not _valid_survival(data["npc"].get("survival")):
 		return false
+	if not PlayerState.valid_status_data(data["player_status"]): return false
+	if not CharacterProgression.valid_save_data(data["character"], game.character_catalog): return false
 	if not data["facing"] is Vector2 or not data["rest_origin"] is Vector2 or not data["encounter_origin"] is Vector2:
 		return false
-	for key in ["clock", "health", "virus_progress", "respawn"]:
+	for key in ["clock", "health"]:
 		if not _number(data[key]):
 			return false
 	if float(data["health"]) < 0.0 or float(data["health"]) > PlayerState.MAX_HEALTH:
 		return false
-	if not data["wounds"] is Array or not data["inventory"] is Array or not data["points"] is Array or not data["zombies"] is Array:
+	if not data["wounds"] is Array or not data["inventory"] is Dictionary or not data["points"] is Array or not data["zombies"] is Array:
 		return false
 	for wound in data["wounds"]:
 		if not wound is Dictionary or not wound.has_all(["type", "location", "severity", "wound_infection"]):
 			return false
 		if not _number(wound["severity"]):
 			return false
-	for key in ["traits", "seen", "milestones"]:
+	for key in ["seen", "milestones"]:
 		if not data[key] is Dictionary:
 			return false
 	for key in data["seen"]:
 		if not key is Vector3i or not data["seen"][key] is bool:
 			return false
-	if not data["virus_exposure"] is bool or not data["encountered"] is bool or not data["rest_floor"] is int:
+	if not data["encountered"] is bool or not data["rest_floor"] is int:
 		return false
 	var brain: Dictionary = data["npc"]["brain"]
 	if not brain.has_all(["traits", "relationships", "memories", "last_noise_position"]):
@@ -137,34 +161,54 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		if not data["milestones"].get(key) is bool:
 			return false
 	for entry in data["zombies"]:
-		if not _valid_actor(entry, game.world_map) or not entry.has_all(["health", "target", "target_floor", "has_target", "cooldown"]):
+		if not _valid_actor(entry, game.world_map) or not entry.has_all(["health", "target", "target_floor", "has_target", "cooldown", "perception"]):
 			return false
 		if not entry["target"] is Vector2 or not _number(entry["cooldown"]) or not entry["health"] is int or not entry["target_floor"] is int or not entry["has_target"] is bool:
 			return false
 		if entry["health"] <= 0 or entry["health"] > ZombieActor.MAX_HEALTH:
 			return false
-	var pack := InventoryGrid.new(game.inventory.grid_size, game.inventory.max_weight)
-	for entry in data["inventory"]:
-		if not entry is Dictionary or not _valid_item(entry.get("stack")) or not entry.get("slot") is Vector2i:
-			return false
-		var stack := _unpack_item(entry["stack"])
-		if not pack._fits(entry["slot"], stack.definition.grid_size):
-			return false
-		pack.placements.append({"stack": stack, "slot": entry["slot"]})
-	if pack.current_weight() > pack.max_weight:
-		return false
+		if not _valid_zombie_perception(entry["perception"]): return false
+	var population: Variant = data["population"]
+	if not population is Dictionary or not population.get("initialized") is bool or not population.get("initial_count") is int or not _number(population.get("migration_elapsed")): return false
+	if population["initial_count"] < data["zombies"].size() or population["initial_count"] > game.zombie_spawner.area_catalog.rules.initial_population_cap: return false
+	if float(population["migration_elapsed"]) < 0.0: return false
+	var pack := InventoryGrid.new(false)
+	pack.penalty_limit = game.inventory.penalty_limit
+	pack.absolute_limit = game.inventory.absolute_limit
+	if not data["inventory"].get("strength") is int or data["inventory"]["strength"] < 0: return false
+	pack.strength = data["inventory"]["strength"]
+	for root in InventoryGrid.ROOTS:
+		if not data["inventory"].get(root) is Array: return false
+		for entry in data["inventory"][root]:
+			if not _valid_item(entry): return false
+			pack.contents(root).append(_unpack_item(entry))
+	if not data["inventory"].get("use_context") is Dictionary: return false
+	pack.use_context = data["inventory"]["use_context"].duplicate(true)
+	if not _valid_pack_action(data.get("pack_action"), data.get("pack_queue"), data["player"]): return false
 	var point_ids: Dictionary = {}
+	var known_ids: Array[String] = []
+	for point in game.interactions.points: known_ids.append(point["id"])
 	for entry in data["points"]:
 		if not entry is Dictionary or not entry.get("id") is String or point_ids.has(entry["id"]):
 			return false
 		point_ids[entry["id"]] = true
+		if not entry["id"] in known_ids and not entry["id"].begins_with("dropped_"): return false
+		if entry["id"].begins_with("dropped_") and not entry.has("contents"): return false
 		if entry.has("contents"):
 			if not entry["contents"] is Array or not _number(entry.get("progress")) or not entry.get("searched") is bool:
 				return false
+			var container := ContainerData.new(entry["id"], entry.get("label", "Container"))
+			if game.inventory.world.has(entry["id"]): container.capacity = game.inventory.world[entry["id"]].capacity
 			for item in entry["contents"]:
 				if not _valid_item(item):
 					return false
+				container.contents.append(_unpack_item(item))
+			pack.world[entry["id"]] = container
+			if entry["id"].begins_with("dropped_"):
+				if not entry.get("position") is Vector2 or not entry.get("floor") is int or not entry.get("label") is String: return false
+				if not game.world_map.can_stand(entry["position"], entry["floor"]): return false
 	for point in game.interactions.points:
+		if String(point["id"]).begins_with("dropped_"): continue
 		if not point_ids.has(point["id"]):
 			return false
 		for entry in data["points"]:
@@ -173,10 +217,21 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 					return false
 				if point.has("triggered") and not entry.get("triggered") is bool:
 					return false
+	if not pack.all_valid(): return false
+	var steps: Array = data["pack_queue"].duplicate()
+	if not data["pack_action"].is_empty(): steps.append(data["pack_action"]["payload"])
+	for step in steps:
+		if pack.find_unit(step["uid"]).is_empty() and not (step["step"] == "return" and pack.use_context.is_empty()): return false
+		if step["step"] in ["move", "take"] and step["destination"] != "ground" and not pack.has_container(step["destination"]): return false
 	return true
 
 
 static func restore(game: MVPGameRoot, data: Dictionary) -> void:
+	if data.get("version") == 3: data = _migrate_v3(data)
+	if data.get("version") == 4: data = _migrate_v4(data)
+	if data.get("version") == 5: data = _migrate_v5(data)
+	if data.get("version") == 6: data = _migrate_v6(data)
+	if not validate(data, game): return
 	game.interactions.interrupt_action("Loading")
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
 	GameTime.elapsed_game_seconds = data["clock"]
@@ -186,14 +241,23 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.player._attack_cooldown_left = PlayerController.ATTACK_COOLDOWN
 	game.player._attack_flash_left = 0.0
 	game.player_state.health = data["health"]
-	game.player_state.wounds.assign(data["wounds"])
-	game.player_state.traits.load_save_data(data["traits"])
-	game.player_state.zombie_virus_exposure = data["virus_exposure"]
-	game.player_state.zombie_virus_infection_progress = data["virus_progress"]
+	game.player_state.load_save_data(data["player_status"])
+	game.player_state.character.load_save_data(data["character"])
 	_restore_survival(game.player_state.survival, data["survival"])
-	game.inventory.placements.clear()
-	for entry in data["inventory"]:
-		game.inventory.placements.append({"stack": _unpack_item(entry["stack"]), "slot": entry["slot"]})
+	game.inventory.strength = data["inventory"]["strength"]
+	for root in InventoryGrid.ROOTS:
+		game.inventory.contents(root).clear()
+		for entry in data["inventory"][root]:
+			game.inventory.contents(root).append(_unpack_item(entry))
+	game.inventory.use_context = data["inventory"]["use_context"].duplicate(true)
+	game.inventory.revision += 1
+	game.interactions.points = game.interactions.points.filter(func(point: Dictionary) -> bool: return not String(point["id"]).begins_with("dropped_"))
+	for saved in data["points"]:
+		if String(saved["id"]).begins_with("dropped_"):
+			game.interactions.points.append({"id": saved["id"], "kind": "container", "position": saved["position"],
+				"floor": saved["floor"], "radius": 0.9, "label": saved["label"],
+				"container": ContainerData.new(saved["id"], saved["label"])})
+	game.inventory.world.clear()
 	for point in game.interactions.points:
 		for saved in data["points"]:
 			if saved["id"] != point["id"]:
@@ -205,6 +269,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 					container.contents.append(_unpack_item(item))
 				container.searched = saved["searched"]
 				container.search_progress_seconds = saved["progress"]
+				game.inventory.world[point["id"]] = container
 			if point.has("triggered"):
 				point["triggered"] = saved.get("triggered", false)
 	game.zombie_spawner.clear_population()
@@ -222,7 +287,10 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 		zombie.target_floor = entry["target_floor"]
 		zombie.has_target = entry["has_target"]
 		zombie.attack_cooldown = entry["cooldown"]
-	game.zombie_spawner.respawn_game_seconds = data["respawn"]
+		zombie.load_perception_save_data(entry["perception"])
+	game.zombie_spawner.population_initialized = data["population"]["initialized"]
+	game.zombie_spawner.initial_population_count = data["population"]["initial_count"]
+	game.zombie_spawner.migration_game_seconds = data["population"]["migration_elapsed"]
 	_restore_actor(game.npc, data["npc"])
 	_restore_survival(game.npc.survival, data["npc"]["survival"])
 	game.npc.brain.load_save_data(data["npc"]["brain"])
@@ -230,12 +298,17 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.npc.cancel_current_task()
 	game.visibility.seen_tiles = data["seen"].duplicate()
 	game.visibility.invalidate()
-	game.visibility.refresh(game.player.logical_position, game.player.facing_direction, false, game.player.floor_level)
+	game.visibility.refresh(game.player.logical_position, game.player.facing_direction, false, game.player.floor_level,
+		game.player_state.perception_multiplier())
 	game.milestones = data["milestones"].duplicate()
 	game.rest_origin = data["rest_origin"]
 	game.rest_floor = data["rest_floor"]
 	game.encountered_zombie = data["encountered"]
 	game.encounter_origin = data["encounter_origin"]
+	game.interactions.active_action = data["pack_action"].duplicate(true)
+	game.interactions.pack_queue.assign(data["pack_queue"].duplicate(true))
+	game.player.interaction_locked = not game.interactions.active_action.is_empty()
+	game.interactions.points_changed.emit()
 
 
 static func _actor_data(actor: Node) -> Dictionary:
@@ -281,7 +354,7 @@ static func _valid_survival(data: Variant) -> bool:
 	return true
 
 
-static func _pack_items(items: Array[ItemStack]) -> Array:
+static func _pack_items(items: Array) -> Array:
 	var result: Array = []
 	for item in items:
 		result.append(_pack_item(item))
@@ -289,29 +362,104 @@ static func _pack_items(items: Array[ItemStack]) -> Array:
 
 
 static func _pack_item(stack: ItemStack) -> Dictionary:
-	var item := stack.definition
-	return {"id": item.id, "name": item.display_name, "size": item.grid_size,
-		"weight": item.unit_weight, "tags": item.tags.duplicate(), "quantity": stack.quantity}
+	return InventoryCodec.pack(stack)
 
 
 static func _valid_item(data: Variant) -> bool:
-	if not data is Dictionary or not data.has_all(["id", "name", "size", "weight", "tags", "quantity"]):
-		return false
-	if not data["tags"] is Array:
-		return false
-	for tag in data["tags"]:
-		if not tag is String:
-			return false
-	return (data["id"] is String and data["name"] is String and data["size"] is Vector2i
-		and data["size"].x > 0 and data["size"].y > 0 and _number(data["weight"])
-		and data["weight"] >= 0 and data["tags"] is Array
-		and data["quantity"] is int and data["quantity"] > 0)
+	return InventoryCodec.valid(data)
 
 
 static func _unpack_item(data: Dictionary) -> ItemStack:
-	var tags: Array[String] = []
-	tags.assign(data["tags"])
-	return ItemStack.new(ItemDefinition.new(data["id"], data["name"], data["size"], data["weight"], tags), data["quantity"])
+	return InventoryCodec.unpack(data)
+
+
+static func _valid_pack_action(action: Variant, queue: Variant, player_data: Dictionary) -> bool:
+	if not action is Dictionary or not queue is Array or queue.size() > 4096: return false
+	if action.is_empty(): return queue.is_empty()
+	if action.get("kind") != "pack" or not action.get("label") is String: return false
+	if not _number(action.get("duration")) or not _number(action.get("remaining")): return false
+	if action["duration"] <= 0 or action["remaining"] < 0 or action["remaining"] > action["duration"]: return false
+	if action.get("position") != player_data["position"] or action.get("floor") != player_data["floor"]: return false
+	var steps: Array = queue.duplicate()
+	steps.append(action.get("payload"))
+	for step in steps:
+		if not step is Dictionary or not step.get("step") in ["move", "take", "use", "return", "wear", "unwear", "repair", "treat"]: return false
+		if not step.get("uid") is String or not step.get("destination") is String: return false
+		if step.get("step") == "repair" and (not step.get("region") is String or not step.get("rag_uid") is String): return false
+		if step.get("step") == "treat" and (not step.get("wound_id") is String or not step.get("treatment") is String): return false
+		if not step.get("index", 1) is int or not step.get("total", 1) is int or step.get("index", 1) < 1 or step.get("total", 1) < step.get("index", 1): return false
+		if step["step"] == "take" and (not step.get("origin") is String or not step.get("return_after") is bool): return false
+		for flag in ["free_hand", "pickup", "displace"]:
+			if not step.get(flag, false) is bool: return false
+	return true
+
+
+static func _migrate_v3(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = 4
+	if data.get("inventory") is Dictionary:
+		for slot in InventoryGrid.CLOTHING_SLOTS:
+			if not data["inventory"].has(slot): data["inventory"][slot] = []
+	return _migrate_v4(data)
+
+static func _migrate_v4(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = 5
+	# v4 stored fatigue as accumulated tiredness; v5 stores a rested reserve.
+	if data.get("survival") is Dictionary:
+		data["survival"]["fatigue"] = 100.0 - float(data["survival"].get("fatigue", 0.0))
+	if data.get("npc") is Dictionary and data["npc"].get("survival") is Dictionary:
+		data["npc"]["survival"]["fatigue"] = 100.0 - float(data["npc"]["survival"].get("fatigue", 0.0))
+	var state := PlayerState.new()
+	state.wounds.assign(data.get("wounds", []))
+	for wound in state.wounds: state._normalize_wound(wound)
+	state.zombie_virus_exposure = data.get("virus_exposure", false)
+	if state.zombie_virus_exposure:
+		var old_progress := clampf(float(data.get("virus_progress", 0.0)), 0.0, 1.0)
+		state.zombie_virus_deadline = float(data.get("clock", 0.0)) + StatusConfig.VIRUS_LATENT_MIN_SECONDS * (1.0 - old_progress)
+	data["wounds"] = state.wounds.duplicate(true)
+	data["player_status"] = state.to_save_data()
+	return _migrate_v5(data)
+
+static func _migrate_v5(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = 6
+	var catalog := CharacterCatalog.new()
+	var character := CharacterProgression.new()
+	character.setup(catalog)
+	character.creation_complete = true
+	data["character"] = character.to_save_data()
+	data.erase("traits")
+	return _migrate_v6(data)
+
+
+static func _migrate_v6(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = VERSION
+	var now := float(data.get("clock", 0.0))
+	for zombie in data.get("zombies", []):
+		if not zombie is Dictionary: continue
+		zombie["perception"] = {"awareness": ZombieActor.Awareness.VISUAL_MEMORY if zombie.get("has_target", false) else ZombieActor.Awareness.IDLE,
+			"target_actor_id": "", "visual_memory_expires_at": now + 90.0,
+			"sound_memory_expires_at": now, "search_expires_at": now,
+			"stimulus_lock_until": now, "last_stimulus_time": -1.0,
+			"last_stimulus_loudness": 0.0, "migration_area_id": "", "facing": Vector2.DOWN}
+	data["population"] = {"initialized": true, "initial_count": data.get("zombies", []).size(),
+		"migration_elapsed": maxf(0.0, float(data.get("respawn", 0.0)))}
+	data.erase("respawn")
+	return data
+
+
+static func _valid_zombie_perception(data: Variant) -> bool:
+	if not data is Dictionary or not data.has_all(["awareness", "target_actor_id", "visual_memory_expires_at",
+		"sound_memory_expires_at", "search_expires_at", "stimulus_lock_until", "last_stimulus_time",
+		"last_stimulus_loudness", "migration_area_id", "facing"]): return false
+	if not data["awareness"] is int or data["awareness"] < ZombieActor.Awareness.IDLE or data["awareness"] > ZombieActor.Awareness.MIGRATION: return false
+	if not data["target_actor_id"] is String or not data["migration_area_id"] is String or not data["facing"] is Vector2: return false
+	if not data["facing"].is_finite(): return false
+	for key in ["visual_memory_expires_at", "sound_memory_expires_at", "search_expires_at", "stimulus_lock_until", "last_stimulus_time", "last_stimulus_loudness"]:
+		if not _number(data[key]): return false
+	return true
 
 
 static func _number(value: Variant) -> bool:

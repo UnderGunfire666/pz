@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="OccupationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/occupation_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:lumberjack"
+display_name = "Lumberjack"
+description = "Slightly faster movement through forests and woodland.Less muscle strain from chopping trees."
+point_bonus = 0
+xp_boosts = {"Axe": 2, "Strength": 1, "Maintenance": 1}
+granted_trait_ids = PackedStringArray("base:axeman")
+granted_recipe_ids = PackedStringArray()
+pending_effect_ids = PackedStringArray()

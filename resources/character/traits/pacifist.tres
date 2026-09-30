@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:pacifist"
+display_name = "Reluctant Fighter"
+description = "Decreased combat XP gains."
+cost = -5
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {}
+incompatible_trait_ids = PackedStringArray()
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray("combat_xp_multiplier_0_75")
+pending_effect_ids = PackedStringArray()
+can_change_during_play = false

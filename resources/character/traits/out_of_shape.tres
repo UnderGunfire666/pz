@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:out of shape"
+display_name = "Out of Shape"
+description = "Low endurance, low endurance regeneration."
+cost = -6
+selectable = true
+profession_trait = false
+disabled_in_multiplayer = false
+xp_boosts = {"Fitness": -2}
+incompatible_trait_ids = PackedStringArray("base:athletic", "base:fit", "base:unfit")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray()
+effect_ids = PackedStringArray("starting_skill_levels", "attribute_level_trait")
+pending_effect_ids = PackedStringArray("non_skill_trait_effect:base:out of shape")
+can_change_during_play = true

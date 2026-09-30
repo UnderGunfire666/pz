@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="ZombieAreaDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/zombie_area_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "corner_store"
+display_name = "Corner Grocery"
+pressure = 0.82
+population_points = PackedVector3Array(12.1, 6.6, 0, 14.7, 5.4, 0, 15.3, 6.7, 0, 12.2, 3.6, 0, 14.5, 5.5, 1, 14.5, 4.5, 2)
+adjacent_area_ids = PackedStringArray("roads", "outskirts")

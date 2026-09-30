@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="TraitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/trait_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "base:herbalist_prof"
+display_name = "Herbalist"
+description = "Can find medicinal herbs and craft medicines and poultices from them."
+cost = 0
+selectable = false
+profession_trait = true
+disabled_in_multiplayer = false
+xp_boosts = {"PlantScavenging": 1}
+incompatible_trait_ids = PackedStringArray("base:herbalist")
+granted_trait_ids = PackedStringArray()
+granted_recipe_ids = PackedStringArray("Herbalist", "MakePlantainPoultice", "MakeComfreyPoultice", "MakeWildGarlicPoultice", "base:black sage growing season", "base:broadleaf plantain growing season", "base:comfrey growing season", "base:common mallow growing season", "base:wild garlic growing season")
+effect_ids = PackedStringArray("starting_skill_levels")
+pending_effect_ids = PackedStringArray("recipe_unlocks", "non_skill_trait_effect:base:herbalist_prof")
+can_change_during_play = false
