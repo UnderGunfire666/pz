@@ -750,28 +750,35 @@ func _update_visible_content_regions() -> void:
 	if polygon.size() < 3:
 		return
 	var floor_index := visibility.viewer_floor
-	# This is the exact set accepted by refresh(), rather than a rectangular
-	# radius scan which becomes increasingly wasteful as map dimensions grow.
-	for key_value in visibility.visible_tiles:
-		var key: Vector3i = key_value
-		if key.z != floor_index:
-			continue
-		var cell := Vector2i(key.x, key.y)
-		for tile_polygon in _tile_polygons(cell, floor_index):
-			for fragment in Geometry2D.intersect_polygons(tile_polygon, polygon):
-				if fragment.size() < 3:
-					continue
-				var rect := Rect2(fragment[0], Vector2.ZERO)
-				for point in fragment:
-					rect = rect.expand(point)
-				if not visibility.can_see_position(rect.get_center(), floor_index):
-					continue
-				# Insets avoid treating contact at a rear wall as occlusion.
-				if rect.size.x <= 0.04 or rect.size.y <= 0.04:
-					continue
-				rect = rect.grow(-0.02)
-				_visible_content_regions.append(AABB(Vector3(rect.position.x,
-					floor_index * world_map.floor_height + 0.03, rect.position.y), Vector3(rect.size.x, 1.85, rect.size.y)))
+	# Intersect all existing floor tiles in the small FOV bounds with the
+	# continuous contour.  visible_tiles is intentionally not used here: it is
+	# persistent grid exploration data and has no authority over a partial cell
+	# currently visible through a doorway.
+	var bounds := Rect2(polygon[0], Vector2.ZERO)
+	for point in polygon:
+		bounds = bounds.expand(point)
+	var min_x := maxi(0, floori(bounds.position.x))
+	var max_x := mini(world_map.width - 1, ceili(bounds.end.x))
+	var min_y := maxi(0, floori(bounds.position.y))
+	var max_y := mini(world_map.height - 1, ceili(bounds.end.y))
+	for y in range(min_y, max_y + 1):
+		for x in range(min_x, max_x + 1):
+			var cell := Vector2i(x, y)
+			if world_map.get_tile_at(cell, floor_index) == null:
+				continue
+			for tile_polygon in _tile_polygons(cell, floor_index):
+				for fragment in Geometry2D.intersect_polygons(tile_polygon, polygon):
+					if fragment.size() < 3:
+						continue
+					var rect := Rect2(fragment[0], Vector2.ZERO)
+					for point in fragment:
+						rect = rect.expand(point)
+					# Insets avoid treating contact at a rear wall as occlusion.
+					if rect.size.x <= 0.04 or rect.size.y <= 0.04:
+						continue
+					rect = rect.grow(-0.02)
+					_visible_content_regions.append(AABB(Vector3(rect.position.x,
+						floor_index * world_map.floor_height + 0.03, rect.position.y), Vector3(rect.size.x, 1.85, rect.size.y)))
 
 
 func _player_reveal_rect(feet: Vector3) -> Vector4:
@@ -933,8 +940,9 @@ func _update_fog_mask(floor_level: int) -> void:
 
 
 func _rasterize_visibility(image: Image, floor_level: int, pixels_per_tile: int) -> void:
-	# Scan-convert the wall-clipped contour at sub-tile resolution. Whole white
-	# tile squares would restore the jagged FOV edge removed by earlier work.
+	# Scan-convert the wall-clipped contour at sub-tile resolution. Do not gate
+	# pixels by a grid-cell visibility flag: that would hide a partly exposed
+	# doorway or body simply because the cell centre is behind a wall.
 	var polygon := visibility.visible_world_polygon
 	if polygon.size() < 3:
 		return
@@ -956,12 +964,7 @@ func _rasterize_visibility(image: Image, floor_level: int, pixels_per_tile: int)
 		for index in range(0, crossings.size() - 1, 2):
 			var start := maxi(0, int(ceil(crossings[index] - 0.5)))
 			var end := mini(image.get_width(), int(ceil(crossings[index + 1] - 0.5)))
-			while start < end:
-				var cell := Vector2i(start / pixels_per_tile, row / pixels_per_tile)
-				var next := mini(end, (cell.x + 1) * pixels_per_tile)
-				if visibility.is_tile_visible(cell, floor_level):
-					image.fill_rect(Rect2i(start, row, next - start, 1), Color.WHITE)
-				start = next
+			image.fill_rect(Rect2i(start, row, end - start, 1), Color.WHITE)
 
 
 static func fog_color_for_seen(seen: bool) -> Color:
@@ -1041,10 +1044,10 @@ func _actor_is_visible(node: Node2D, actor_id: int, logical_position: Vector2,
 		and String(cached["stair"]) == stair_id
 		and String(cached["player_stair"]) == player.stair_id):
 		return bool(cached["visible"])
-	var result := visibility.can_see_position(logical_position, actor_floor)
+	var result := visibility.can_see_actor(logical_position, actor_floor)
 	if not stair_id.is_empty() or not player.stair_id.is_empty():
 		result = (not stair_id.is_empty() and stair_id == player.stair_id
-			and visibility.can_see_position(logical_position, player.floor_level))
+			and visibility.can_see_actor(logical_position, player.floor_level))
 	_actor_visibility_cache[actor_id] = {
 		"revision": visibility.revision,
 		"position": logical_position,

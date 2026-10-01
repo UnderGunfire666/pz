@@ -17,10 +17,13 @@ var vision_radius := 0.0
 var half_fov_radians := 0.0
 var perception_multiplier := 1.0
 const SELF_VISION_RADIUS := 1.2
-# 128 rays produce a 2.8-degree contour, which remains smooth once rasterized
-# into the filtered FOV mask while halving the wall-intersection work done on
-# each meaningful player/FOV update.
+# The regular rays preserve curved range limits.  Rays immediately beside each
+# nearby wall endpoint resolve the narrow wedges that a uniform angular sample
+# misses at doors, corners and small props.
 const FOV_RAY_COUNT := 128
+const ENDPOINT_RAY_OFFSET := 0.0005
+const TILE_SAMPLE_INSET := 0.16
+const ACTOR_VISIBILITY_RADIUS := 0.22
 var revision := 0
 var _last_world_revision := -1
 var _last_light := -1.0
@@ -61,10 +64,12 @@ func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next
 	_mark_seen(viewer_key)
 
 	vision_radius = 6.6 * lerpf(0.55, 1.0, world_map.ambient_light()) * perception_multiplier
-	half_fov_radians = deg_to_rad(68.0)
-	# FOV is bounded by vision_radius.  Do not re-test an entire city whenever
-	# the player takes a step; only cells which can possibly fall inside the
-	# sight circle need a LOS query.
+	# Full player field of view is 160 degrees, centred on facing direction.
+	half_fov_radians = deg_to_rad(80.0)
+	visible_world_polygon = _build_visibility_polygon()
+	# Grid cells still own exploration persistence, while their revealed state
+	# is sampled from continuous world positions. This prevents a wall cutting a
+	# corner of a cell from making its whole explored record jump on or off.
 	var min_x := maxi(0, int(floor(viewer_position.x - vision_radius)))
 	var max_x := mini(world_map.width - 1, int(floor(viewer_position.x + vision_radius)))
 	var min_y := maxi(0, int(floor(viewer_position.y - vision_radius)))
@@ -72,12 +77,10 @@ func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next
 	for y in range(min_y, max_y + 1):
 		for x in range(min_x, max_x + 1):
 			var cell := Vector2i(x, y)
-			var target := Vector2(cell) + Vector2(0.5, 0.5)
-			if can_see_position(target, viewer_floor):
+			if _tile_has_visible_sample(cell):
 				var key := Vector3i(x, y, viewer_floor)
 				visible_tiles[key] = true
 				_mark_seen(key)
-	visible_world_polygon = _build_visibility_polygon()
 	revision += 1
 
 
@@ -92,6 +95,20 @@ func can_see_position(world_position: Vector2, floor_level: int = 0) -> bool:
 		if delta_angle > half_fov_radians:
 			return false
 	return room_contents_allowed(world_position, floor_level)
+
+
+func can_see_actor(world_position: Vector2, floor_level: int = 0,
+		radius: float = ACTOR_VISIBILITY_RADIUS) -> bool:
+	# A character is not a tile centre. Sampling its torso footprint lets a
+	# player see a body that is partly exposed around a wall or doorway, while
+	# keeping a fully occluded body hidden.
+	if can_see_position(world_position, floor_level):
+		return true
+	for offset in [Vector2(radius, 0.0), Vector2(-radius, 0.0),
+			Vector2(0.0, radius), Vector2(0.0, -radius)]:
+		if can_see_position(world_position + offset, floor_level):
+			return true
+	return false
 
 
 func _mark_seen(key: Vector3i) -> void:
@@ -128,13 +145,40 @@ func _build_visibility_polygon() -> PackedVector2Array:
 	var polygon := PackedVector2Array()
 	var radius := maxf(vision_radius, SELF_VISION_RADIUS)
 	var walls := world_map.query_walls(viewer_floor, Rect2(viewer_position, Vector2.ZERO).grow(radius))
+	var angles: Array[float] = []
 	for ray_index in range(FOV_RAY_COUNT):
-		var angle := TAU * float(ray_index) / float(FOV_RAY_COUNT)
+		angles.append(TAU * float(ray_index) / float(FOV_RAY_COUNT))
+	# These rays make the focused cone end at its authored angle even when that
+	# angle falls between two regular samples.
+	for boundary in [facing_direction.angle() - half_fov_radians,
+		facing_direction.angle() + half_fov_radians]:
+		for offset in [-ENDPOINT_RAY_OFFSET, 0.0, ENDPOINT_RAY_OFFSET]:
+			angles.append(posmod(boundary + offset, TAU))
+	for wall_face in walls:
+		for endpoint: Vector2 in [wall_face["start"], wall_face["end"]]:
+			if viewer_position.distance_squared_to(endpoint) > radius * radius:
+				continue
+			var endpoint_angle := posmod((endpoint - viewer_position).angle(), TAU)
+			for offset in [-ENDPOINT_RAY_OFFSET, 0.0, ENDPOINT_RAY_OFFSET]:
+				angles.append(posmod(endpoint_angle + offset, TAU))
+	angles.sort()
+	for angle in angles:
 		var direction := Vector2.from_angle(angle)
 		var angle_from_facing := absf(wrapf(angle - facing_direction.angle(), -PI, PI))
 		var ray_radius := vision_radius if angle_from_facing <= half_fov_radians else SELF_VISION_RADIUS
 		polygon.append(_ray_endpoint(direction, ray_radius, walls))
 	return polygon
+
+
+func _tile_has_visible_sample(cell: Vector2i) -> bool:
+	var origin := Vector2(cell)
+	for offset in [Vector2(0.5, 0.5), Vector2(TILE_SAMPLE_INSET, TILE_SAMPLE_INSET),
+			Vector2(1.0 - TILE_SAMPLE_INSET, TILE_SAMPLE_INSET),
+			Vector2(TILE_SAMPLE_INSET, 1.0 - TILE_SAMPLE_INSET),
+			Vector2(1.0 - TILE_SAMPLE_INSET, 1.0 - TILE_SAMPLE_INSET)]:
+		if can_see_position(origin + offset, viewer_floor):
+			return true
+	return false
 
 
 func _ray_endpoint(direction: Vector2, max_distance: float, candidates: Array) -> Vector2:

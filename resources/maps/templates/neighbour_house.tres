@@ -1,13 +1,13 @@
-[gd_resource type="Resource" script_class="MapBuildingTemplate" load_steps=4 format=3]
+[gd_resource type="Resource" script_class="MapBuildingTemplate" format=3 uid="uid://dntf7fcyqwkvg"]
 
-[ext_resource type="Script" path="res://scripts/data/map_building_template.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/data/map_room_definition.gd" id="2"]
+[ext_resource type="Script" uid="uid://4lg4plmaohwd" path="res://scripts/data/map_building_template.gd" id="1"]
+[ext_resource type="Script" uid="uid://8icdnjn3lbfo" path="res://scripts/data/map_room_definition.gd" id="2"]
+[ext_resource type="Script" uid="uid://dbeg74rtu36p3" path="res://scripts/data/map_wall_edge_definition.gd" id="3_sb4k6"]
 
 [sub_resource type="Resource" id="Room_ground"]
 script = ExtResource("2")
 id = "ground"
 display_name = "Neighbour House / Ground"
-room_type = "residential"
 bounds = Rect2i(0, 0, 4, 3)
 
 [sub_resource type="Resource" id="Room_upper"]
@@ -25,5 +25,8 @@ display_name = "Neighbour House"
 footprint = Vector2i(4, 3)
 floor_count = 2
 door_local_cell = Vector2i(1, 2)
-zone_type = "residential"
 rooms = Array[ExtResource("2")]([SubResource("Room_ground"), SubResource("Room_upper")])
+indoor_floors = null
+has_roof = null
+explicit_layout = null
+stairs = null

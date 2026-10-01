@@ -1,8 +1,8 @@
-[gd_resource type="Resource" script_class="MapBuildingTemplate" load_steps=8 format=3]
+[gd_resource type="Resource" script_class="MapBuildingTemplate" format=3 uid="uid://dj5on0xuj3gx0"]
 
-[ext_resource type="Script" path="res://scripts/data/map_building_template.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/data/map_room_definition.gd" id="2"]
-[ext_resource type="Script" path="res://scripts/data/map_wall_edge_definition.gd" id="3"]
+[ext_resource type="Script" uid="uid://4lg4plmaohwd" path="res://scripts/data/map_building_template.gd" id="1"]
+[ext_resource type="Script" uid="uid://8icdnjn3lbfo" path="res://scripts/data/map_room_definition.gd" id="2"]
+[ext_resource type="Script" uid="uid://dbeg74rtu36p3" path="res://scripts/data/map_wall_edge_definition.gd" id="3"]
 
 [sub_resource type="Resource" id="Room_ground"]
 script = ExtResource("2")
@@ -37,8 +37,8 @@ level = 1
 [sub_resource type="Resource" id="Wall_third_partition"]
 script = ExtResource("3")
 id = "third_floor_partition"
-start = Vector2(4.0, 0.18)
-end = Vector2(4.0, 2.0)
+start = Vector2(4, 0.18)
+end = Vector2(4, 2)
 level = 2
 
 [resource]
@@ -50,4 +50,8 @@ floor_count = 3
 door_local_cell = Vector2i(3, 6)
 zone_type = "commercial"
 rooms = Array[ExtResource("2")]([SubResource("Room_ground"), SubResource("Room_second"), SubResource("Room_third")])
+indoor_floors = null
 wall_edges = Array[ExtResource("3")]([SubResource("Wall_second_partition"), SubResource("Wall_third_partition")])
+has_roof = null
+explicit_layout = null
+stairs = null
