@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="MapTerrainDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/map_terrain_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "asphalt"
+display_name = "Asphalt"
+category = "asphalt"
+passable = true
+movement_cost = 0.9
+sound_attenuation = 0.02
+supports_floor = true
+visual_recipe = "road"

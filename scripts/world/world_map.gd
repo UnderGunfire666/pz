@@ -2,10 +2,18 @@ class_name WorldMap
 extends Node
 
 ## Simulation authority: sparse floor support, wall faces, stairs and navigation.
-const WIDTH := 18
-const HEIGHT := 14
+const WIDTH := 64 # Legacy compatibility; use width for authored maps.
+const HEIGHT := 64 # Legacy compatibility; use height for authored maps.
 const FLOOR_HEIGHT := 3.0
 const ACTOR_RADIUS := 0.22
+const NAV_GRID_STEP := 0.5
+const NAV_NEAREST_RADIUS_CELLS := 4
+const SPATIAL_QUERY_INDEX = preload("res://scripts/world/spatial_query_index.gd")
+const DEFAULT_MAP: MapDefinition = preload("res://resources/maps/orangeville_prototype.tres")
+@export var definition: MapDefinition = DEFAULT_MAP
+var width := 64
+var height := 64
+var floor_height := FLOOR_HEIGHT
 var floors: Dictionary = {}
 var buildings: Dictionary = {}
 var stairs: Dictionary = {}
@@ -13,36 +21,113 @@ var revision := 0
 var _navigation := AStar3D.new()
 var _nav_points: Dictionary = {}
 var _floor_node_ids: Dictionary = {}
+var _nav_grid_ids: Dictionary = {}
+var _stair_nav_ids: Dictionary = {}
 var _stair_node_pairs: Array[Vector2i] = []
+var _last_navigation_grid_entries_scanned := 0
+var _last_nearest_nav_candidates := 0
 var _zombie_areas := ZombieAreaCatalog.new()
+var _wall_index := SPATIAL_QUERY_INDEX.new()
+var _stair_index := SPATIAL_QUERY_INDEX.new()
+var _spatial_index_ready := false
 
 
 func _ready() -> void:
-	_build_demo_map()
+	load_definition(definition)
 
 
-func _build_demo_map() -> void:
+func load_definition(value: MapDefinition, build_navigation: bool = true) -> void:
+	var started_usec := Time.get_ticks_usec()
+	definition = value if value != null else DEFAULT_MAP
+	width = 0
+	height = 0
+	floor_height = definition.default_floor_spacing
 	floors.clear()
 	buildings.clear()
 	stairs.clear()
-	floors[0] = FloorData.new(0)
-	for y in range(HEIGHT):
-		for x in range(WIDTH):
-			var road := y == 7 or x == 8
-			floors[0].tiles[Vector2i(x, y)] = WorldTileData.new("road" if road else "grass", true,
-				_area_pressure("roads" if road else "outskirts"))
-	_make_building("safehouse", "Miller House", Rect2i(2, 2, 5, 4), Vector2i(4, 5), 2, _area_pressure("safehouse"), true)
-	_make_building("corner_store", "Corner Grocery", Rect2i(10, 2, 7, 7), Vector2i(13, 8), 3, _area_pressure("corner_store"))
-	_make_building("neighbour_house", "Neighbour House", Rect2i(2, 9, 4, 3), Vector2i(3, 11), 2, _area_pressure("neighbour_house"))
-	_add_stair("safehouse_0_1", "safehouse", Vector2(3.25, 4.5), Vector2(5.75, 4.5), 0, 1, 0.72)
-	_add_stair("neighbour_0_1", "neighbour_house", Vector2(2.7, 9.7), Vector2(5.3, 9.7), 0, 1, 0.72)
-	_add_stair("grocery_0_1", "corner_store", Vector2(11.25, 7.25), Vector2(11.25, 3.75), 0, 1)
-	_add_stair("grocery_1_2", "corner_store", Vector2(12.25, 3.75), Vector2(12.25, 7.25), 1, 2)
-	# Different upper layouts prove that collision/LOS do not reuse ground walls.
-	_add_wall(Vector2(13.4, 4.6), Vector2(16.82, 4.6), "corner_store", 1)
-	_add_wall(Vector2(14.0, 2.18), Vector2(14.0, 4.0), "corner_store", 2)
-	_build_navigation()
+	_spatial_index_ready = false
+	for cell: MapCellDefinition in definition.cells:
+		width = max(width, cell.cell_coordinate.x * cell.size.x + cell.size.x)
+		height = max(height, cell.cell_coordinate.y * cell.size.y + cell.size.y)
+		for authored_level: MapLevelDefinition in cell.levels:
+			if not floors.has(authored_level.level):
+				floors[authored_level.level] = FloorData.new(authored_level.level)
+			for paint: MapTerrainPaint in authored_level.terrain_paints:
+				if not paint.is_override:
+					_apply_terrain_paint(cell, authored_level.level, paint)
+	for road: MapRoadDefinition in definition.roads:
+		_apply_road(road)
+	# Explicit cell paints deliberately run last: they are local overrides over
+	# deterministic macro output such as roads.
+	for cell: MapCellDefinition in definition.cells:
+		for authored_level: MapLevelDefinition in cell.levels:
+			for paint: MapTerrainPaint in authored_level.terrain_paints:
+				if paint.is_override:
+					_apply_terrain_paint(cell, authored_level.level, paint)
+	for building: MapBuildingInstanceDefinition in definition.buildings:
+		_make_building(building)
+	for edge: MapWallEdgeDefinition in definition.wall_edges:
+		if edge.kind == "wall" and not edge.initially_open and edge.initially_intact:
+			if not floors.has(edge.level): floors[edge.level] = FloorData.new(edge.level)
+			_add_wall(edge.start, edge.end, edge.building_id, edge.level)
+	for stair: MapStairDefinition in definition.stairs:
+		_add_stair(stair)
+	_apply_zones()
+	rebuild_spatial_index()
+	var navigation_started_usec := Time.get_ticks_usec()
+	if build_navigation:
+		_build_navigation()
+	print("[Startup/Map] Geometry + spatial index: %.2f ms; navigation: %.2f ms" % [
+		float(navigation_started_usec - started_usec) / 1000.0,
+		float(Time.get_ticks_usec() - navigation_started_usec) / 1000.0])
 	revision += 1
+
+
+func _apply_terrain_paint(cell: MapCellDefinition, level: int, paint: MapTerrainPaint) -> void:
+	if paint.terrain == null:
+		return
+	var offset := cell.cell_coordinate * cell.size + paint.rect.position
+	var rect := Rect2i(offset, paint.rect.size)
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if x < 0 or y < 0 or x >= width or y >= height:
+				continue
+			var terrain := paint.terrain
+			var area_id := "roads" if terrain.category == "asphalt" else "outskirts"
+			(floors[level] as FloorData).tiles[Vector2i(x, y)] = WorldTileData.new(
+				terrain.visual_recipe, terrain.passable, _area_pressure(area_id), "", "", false, level)
+
+
+func _apply_road(road: MapRoadDefinition) -> void:
+	if road.terrain == null or road.centerline.size() < 2:
+		return
+	if not floors.has(road.level):
+		floors[road.level] = FloorData.new(road.level)
+	for index in range(road.centerline.size() - 1):
+		var start := road.centerline[index]
+		var end := road.centerline[index + 1]
+		var bounds := Rect2(start, Vector2.ZERO).expand(end).grow(road.width * 0.5)
+		for y in range(maxi(0, int(floor(bounds.position.y))), mini(height, int(ceil(bounds.end.y)))):
+			for x in range(maxi(0, int(floor(bounds.position.x))), mini(width, int(ceil(bounds.end.x)))):
+				var center := Vector2(x + 0.5, y + 0.5)
+				if center.distance_to(Geometry2D.get_closest_point_to_segment(center, start, end)) > road.width * 0.5:
+					continue
+				var terrain := road.terrain
+				(floors[road.level] as FloorData).tiles[Vector2i(x, y)] = WorldTileData.new(
+					terrain.visual_recipe, terrain.passable, _area_pressure("roads"), "", "", false, road.level)
+
+
+func _apply_zones() -> void:
+	var ordered := definition.zones.duplicate()
+	ordered.sort_custom(func(a: MapZoneDefinition, b: MapZoneDefinition) -> bool: return a.priority < b.priority)
+	for zone: MapZoneDefinition in ordered:
+		if zone.kind != "zombie_pressure" or not floors.has(zone.level):
+			continue
+		for y in range(zone.rect.position.y, zone.rect.end.y):
+			for x in range(zone.rect.position.x, zone.rect.end.x):
+				var tile := get_tile_at(Vector2i(x, y), zone.level)
+				if tile != null:
+					tile.zombie_pressure = zone.pressure
 
 
 func _area_pressure(id: String) -> float:
@@ -50,44 +135,88 @@ func _area_pressure(id: String) -> float:
 	return definition.pressure if definition != null else 0.0
 
 
-func _make_building(id: String, title: String, bounds: Rect2i, door: Vector2i,
-		count: int, pressure: float, safehouse: bool = false) -> void:
-	var building := BuildingData.new(id, title, bounds, "commercial" if id == "corner_store" else "residential", pressure, safehouse)
-	buildings[id] = building
-	for level in range(count):
+func _make_building(source: MapBuildingInstanceDefinition) -> void:
+	var bounds := source.effective_bounds()
+	var floor_count := source.effective_floor_count()
+	var door_cell := source.effective_door_cell()
+	var building := BuildingData.new(source.id, source.effective_display_name(), bounds, source.effective_zone_type(),
+		source.zombie_pressure, source.safehouse)
+	buildings[source.id] = building
+	for level in range(floor_count):
 		if not floors.has(level):
 			floors[level] = FloorData.new(level)
 		var floor_data: FloorData = floors[level]
-		var room := RoomData.new("%s_%d" % [id, level], "%s / %d" % [title, level + 1], bounds, ["interior"], level)
-		building.add_room(room)
-		floor_data.rooms.append(room)
+		_add_authored_rooms(source, building, floor_data, bounds, level)
 		for y in range(bounds.position.y, bounds.end.y):
 			for x in range(bounds.position.x, bounds.end.x):
 				var cell := Vector2i(x, y)
 				var edge := x == bounds.position.x or x == bounds.end.x - 1 or y == bounds.position.y or y == bounds.end.y - 1
-				var is_door := level == 0 and cell == door
+				var is_door := level == 0 and cell == door_cell
 				var kind := "door" if is_door else ("wall" if edge else "floor")
-				floor_data.tiles[cell] = WorldTileData.new(kind, true, pressure, id, room.id, safehouse, level)
+				var room := _room_for_cell(floor_data.rooms, cell, level)
+				floor_data.tiles[cell] = WorldTileData.new(kind, true, source.zombie_pressure, source.id,
+					room.id if room != null else "%s_%d" % [source.id, level], source.safehouse, level)
 				if not edge or is_door:
 					continue
 				if y == bounds.position.y:
-					_add_wall(Vector2(x, y + 0.18), Vector2(x + 1, y + 0.18), id, level)
+					_add_wall(Vector2(x, y + 0.18), Vector2(x + 1, y + 0.18), source.id, level)
 				if y == bounds.end.y - 1:
-					_add_wall(Vector2(x, y + 0.82), Vector2(x + 1, y + 0.82), id, level)
+					_add_wall(Vector2(x, y + 0.82), Vector2(x + 1, y + 0.82), source.id, level)
 				if x == bounds.position.x:
-					_add_wall(Vector2(x + 0.18, y), Vector2(x + 0.18, y + 1), id, level)
+					_add_wall(Vector2(x + 0.18, y), Vector2(x + 0.18, y + 1), source.id, level)
 				if x == bounds.end.x - 1:
-					_add_wall(Vector2(x + 0.82, y), Vector2(x + 0.82, y + 1), id, level)
+					_add_wall(Vector2(x + 0.82, y), Vector2(x + 0.82, y + 1), source.id, level)
+		_add_template_walls(source, level)
+
+
+func _add_template_walls(source: MapBuildingInstanceDefinition, level: int) -> void:
+	if source.template == null:
+		return
+	for edge: MapWallEdgeDefinition in source.template.wall_edges:
+		if edge.level != level or edge.kind != "wall" or edge.initially_open or not edge.initially_intact:
+			continue
+		# Template edges are local-space, so a reusable building remains portable.
+		var origin := Vector2(source.origin)
+		_add_wall(origin + edge.start, origin + edge.end, source.id, level)
+
+
+func _add_authored_rooms(source: MapBuildingInstanceDefinition, building: BuildingData,
+		floor_data: FloorData, bounds: Rect2i, level: int) -> void:
+	var authored := false
+	if source.template != null:
+		for definition: MapRoomDefinition in source.template.rooms:
+			if definition.floor_level != level:
+				continue
+			var room_bounds := Rect2i(source.origin + definition.bounds.position, definition.bounds.size)
+			var room := RoomData.new("%s_%s" % [source.id, definition.id], definition.display_name,
+				room_bounds, [definition.room_type], level)
+			building.add_room(room)
+			floor_data.rooms.append(room)
+			authored = true
+	if not authored:
+		var fallback := RoomData.new("%s_%d" % [source.id, level], "%s / %d" % [source.effective_display_name(), level + 1], bounds, ["interior"], level)
+		building.add_room(fallback)
+		floor_data.rooms.append(fallback)
+
+
+func _room_for_cell(rooms: Array[RoomData], cell: Vector2i, level: int) -> RoomData:
+	for room: RoomData in rooms:
+		if room.floor_level == level and room.bounds.has_point(cell):
+			return room
+	return null
 
 
 func _add_wall(start: Vector2, end: Vector2, building: String, level: int) -> void:
 	floors[level].wall_faces.append({"start": start, "end": end, "building_id": building})
+	_spatial_index_ready = false
 
 
-func _add_stair(id: String, building: String, start: Vector2, end: Vector2,
-		from_floor: int, to_floor: int, width: float = 0.8) -> void:
-	stairs[id] = StairLink.new(id, building, start, end, from_floor, to_floor, width)
-	buildings[building].stair_ids.append(id)
+func _add_stair(source: MapStairDefinition) -> void:
+	_spatial_index_ready = false
+	stairs[source.id] = StairLink.new(source.id, source.building_id, source.start, source.end,
+		source.from_floor, source.to_floor, source.width)
+	if buildings.has(source.building_id):
+		(buildings[source.building_id] as BuildingData).stair_ids.append(source.id)
 
 
 func floor_levels() -> Array:
@@ -99,6 +228,37 @@ func floor_levels() -> Array:
 func wall_faces(level: int) -> Array[Dictionary]:
 	var data: FloorData = floors.get(level)
 	return data.wall_faces if data != null else []
+
+
+func rebuild_spatial_index() -> void:
+	# Call after bulk direct edits to FloorData/stairs. Normal load/add APIs
+	# invalidate automatically. This rebuilds queries, not the navigation graph.
+	_wall_index.clear()
+	_stair_index.clear()
+	for level: int in floors:
+		for face in wall_faces(level):
+			_wall_index.insert(level, Rect2(face["start"], Vector2.ZERO).expand(face["end"]), face)
+	for link: StairLink in stairs.values():
+		var bounds := Rect2(link.start, Vector2.ZERO).expand(link.end).grow(maxf(link.width * 0.5, 0.28))
+		_stair_index.insert(link.from_floor, bounds, link)
+		if link.to_floor != link.from_floor:
+			_stair_index.insert(link.to_floor, bounds, link)
+	_spatial_index_ready = true
+
+
+func query_walls(level: int, bounds: Rect2) -> Array:
+	if not _spatial_index_ready: rebuild_spatial_index()
+	return _wall_index.query(level, bounds)
+
+
+func query_stairs(level: int, bounds: Rect2) -> Array:
+	if not _spatial_index_ready: rebuild_spatial_index()
+	return _stair_index.query(level, bounds)
+
+
+func stairs_on_floor(level: int) -> Array:
+	if not _spatial_index_ready: rebuild_spatial_index()
+	return _stair_index.all_on_floor(level)
 
 
 func get_tile(pos: Vector2, level: int = 0) -> WorldTileData:
@@ -120,7 +280,7 @@ func can_stand(pos: Vector2, level: int = 0) -> bool:
 
 
 func _inside_stair_body(pos: Vector2, level: int, margin: float = 0.0) -> bool:
-	for link: StairLink in stairs.values():
+	for link: StairLink in query_stairs(level, Rect2(pos, Vector2.ZERO).grow(margin)):
 		if level != link.from_floor and level != link.to_floor:
 			continue
 		var offset := pos - link.start
@@ -131,14 +291,20 @@ func _inside_stair_body(pos: Vector2, level: int, margin: float = 0.0) -> bool:
 
 
 func _valid_position(pos: Vector2, level: int, radius: float = ACTOR_RADIUS) -> bool:
+	if not _supported_position(pos, level, radius):
+		return false
+	for face in query_walls(level, Rect2(pos, Vector2.ZERO).grow(radius)):
+		if pos.distance_to(Geometry2D.get_closest_point_to_segment(pos, face["start"], face["end"])) < radius:
+			return false
+	return true
+
+
+func _supported_position(pos: Vector2, level: int, radius: float = ACTOR_RADIUS) -> bool:
 	if not is_walkable(pos, level) or _inside_stair_body(pos, level, radius):
 		return false
 	for offset in [Vector2(radius, 0), Vector2(-radius, 0), Vector2(0, radius), Vector2(0, -radius)]:
 		var tile := get_tile(pos + offset, level)
 		if tile == null or not tile.walkable:
-			return false
-	for face in wall_faces(level):
-		if pos.distance_to(Geometry2D.get_closest_point_to_segment(pos, face["start"], face["end"])) < radius:
 			return false
 	return true
 
@@ -179,7 +345,7 @@ func _move_step(state: Dictionary, motion: Vector2, radius: float) -> Dictionary
 		if along >= link.length():
 			return {"position": link.end, "floor": link.to_floor, "stair_id": ""}
 		return {"position": link.start + link.direction() * along, "floor": level, "stair_id": id}
-	for link: StairLink in stairs.values():
+	for link: StairLink in query_stairs(level, Rect2(pos, Vector2.ZERO).grow(0.28)):
 		var alignment := motion.normalized().dot(link.direction())
 		var entering_up := level == link.from_floor and pos.distance_to(link.start) <= 0.28 and alignment > 0.85
 		var entering_down := level == link.to_floor and pos.distance_to(link.end) <= 0.28 and alignment < -0.85
@@ -192,8 +358,8 @@ func _move_step(state: Dictionary, motion: Vector2, radius: float) -> Dictionary
 func elevation_at(pos: Vector2, level: int, stair_id: String = "") -> float:
 	if not stair_id.is_empty() and stairs.has(stair_id):
 		var link: StairLink = stairs[stair_id]
-		return lerpf(link.from_floor * FLOOR_HEIGHT, link.to_floor * FLOOR_HEIGHT, link.progress_at(pos))
-	return float(level) * FLOOR_HEIGHT
+		return lerpf(link.from_floor * floor_height, link.to_floor * floor_height, link.progress_at(pos))
+	return float(level) * floor_height
 
 
 func display_floor_at(pos: Vector2, level: int, stair_id: String = "") -> int:
@@ -208,7 +374,7 @@ func has_line_of_sight(from: Vector2, to: Vector2, level: int = 0, to_floor: int
 		return false
 	if get_tile(from, level) == null or get_tile(to, level) == null:
 		return false
-	for face in wall_faces(level):
+	for face in query_walls(level, Rect2(from, Vector2.ZERO).expand(to)):
 		if Geometry2D.segment_intersects_segment(from, to, face["start"], face["end"]) != null:
 			return false
 	return true
@@ -241,16 +407,34 @@ func ambient_light() -> float:
 
 
 func _segment_walkable(from: Vector2, to: Vector2, level: int) -> bool:
-	var count := maxi(1, int(ceil(from.distance_to(to) / 0.1)))
+	var count := maxi(1, int(ceil(from.distance_to(to) / 0.07)))
 	for index in range(count + 1):
-		if not _valid_position(from.lerp(to, float(index) / float(count)), level):
+		if not _supported_position(from.lerp(to, float(index) / float(count)), level):
 			return false
-	return has_line_of_sight(from, to, level)
+	# Exact segment clearance avoids sampling past a short wall endpoint. Check
+	# each candidate wall once, rather than for every support sample above.
+	var corridor := Rect2(from, Vector2.ZERO).expand(to).grow(ACTOR_RADIUS)
+	for face in query_walls(level, corridor):
+		var a: Vector2 = face["start"]
+		var b: Vector2 = face["end"]
+		if not corridor.intersects(Rect2(a, Vector2.ZERO).expand(b), true):
+			continue
+		if Geometry2D.segment_intersects_segment(from, to, a, b) != null:
+			return false
+		if from.distance_to(Geometry2D.get_closest_point_to_segment(from, a, b)) < ACTOR_RADIUS:
+			return false
+		if to.distance_to(Geometry2D.get_closest_point_to_segment(to, a, b)) < ACTOR_RADIUS:
+			return false
+		if a.distance_to(Geometry2D.get_closest_point_to_segment(a, from, to)) < ACTOR_RADIUS:
+			return false
+		if b.distance_to(Geometry2D.get_closest_point_to_segment(b, from, to)) < ACTOR_RADIUS:
+			return false
+	return true
 
 
 func _add_nav_point(pos: Vector2, level: int) -> int:
 	var id := _navigation.get_point_count()
-	_navigation.add_point(id, Vector3(pos.x, level * FLOOR_HEIGHT, pos.y))
+	_navigation.add_point(id, Vector3(pos.x, level * floor_height, pos.y))
 	_nav_points[id] = {"position": pos, "floor": level}
 	var ids: Array = _floor_node_ids.get(level, [])
 	ids.append(id)
@@ -262,33 +446,77 @@ func _build_navigation() -> void:
 	_navigation.clear()
 	_nav_points.clear()
 	_floor_node_ids.clear()
+	_nav_grid_ids.clear()
+	_stair_nav_ids.clear()
 	_stair_node_pairs.clear()
 	for level: int in floor_levels():
-		for y in range(HEIGHT * 2):
-			for x in range(WIDTH * 2):
-				var pos := Vector2(x * 0.5 + 0.25, y * 0.5 + 0.25)
+		for y in range(int(ceil(float(height) / NAV_GRID_STEP))):
+			for x in range(int(ceil(float(width) / NAV_GRID_STEP))):
+				var pos := Vector2((float(x) + 0.5) * NAV_GRID_STEP, (float(y) + 0.5) * NAV_GRID_STEP)
 				if _valid_position(pos, level):
-					_add_nav_point(pos, level)
+					var id := _add_nav_point(pos, level)
+					_nav_grid_ids[Vector3i(x, y, level)] = id
+	# Each grid key is visited exactly once. Previously every completed floor
+	# re-scanned every earlier floor and skipped it after the fact.
+	_last_navigation_grid_entries_scanned = _nav_grid_ids.size()
+	for key: Vector3i in _nav_grid_ids:
+		var from_id := int(_nav_grid_ids[key])
+		var from: Vector2 = _nav_points[from_id]["position"]
+		for offset in [Vector2i.RIGHT, Vector2i.DOWN, Vector2i(1, 1), Vector2i(1, -1)]:
+			var neighbour_key := Vector3i(key.x + offset.x, key.y + offset.y, key.z)
+			if not _nav_grid_ids.has(neighbour_key):
+				continue
+			var to_id := int(_nav_grid_ids[neighbour_key])
+			var to: Vector2 = _nav_points[to_id]["position"]
+			if _nav_neighbours_connect(from, to, key.z):
+				_navigation.connect_points(from_id, to_id)
 	for link: StairLink in stairs.values():
 		var low := _add_nav_point(link.start, link.from_floor)
 		var high := _add_nav_point(link.end, link.to_floor)
+		_stair_nav_ids[link.from_floor] = _stair_nav_ids.get(link.from_floor, []) + [low]
+		_stair_nav_ids[link.to_floor] = _stair_nav_ids.get(link.to_floor, []) + [high]
 		_stair_node_pairs.append(Vector2i(low, high))
-	for level in _floor_node_ids:
-		var ids: Array = _floor_node_ids[level]
-		for index in range(ids.size()):
-			var from: Vector2 = _nav_points[ids[index]]["position"]
-			for next_index in range(index + 1, ids.size()):
-				var to: Vector2 = _nav_points[ids[next_index]]["position"]
-				if from.distance_squared_to(to) <= 0.81 and _segment_walkable(from, to, level):
-					_navigation.connect_points(ids[index], ids[next_index])
+		_connect_stair_landing(low, link.start, link.from_floor)
+		_connect_stair_landing(high, link.end, link.to_floor)
 	for pair in _stair_node_pairs:
 		_navigation.connect_points(pair.x, pair.y)
+
+
+func _connect_stair_landing(stair_node: int, position: Vector2, level: int) -> void:
+	var center := Vector2i(floor(position.x / NAV_GRID_STEP), floor(position.y / NAV_GRID_STEP))
+	for y in range(center.y - 2, center.y + 3):
+		for x in range(center.x - 2, center.x + 3):
+			var key := Vector3i(x, y, level)
+			if not _nav_grid_ids.has(key):
+				continue
+			var node := int(_nav_grid_ids[key])
+			var target: Vector2 = _nav_points[node]["position"]
+			if target.distance_squared_to(position) <= 1.44 and _segment_walkable(position, target, level):
+				_navigation.connect_points(stair_node, node)
+
+
+func _nav_neighbours_connect(from: Vector2, to: Vector2, level: int) -> bool:
+	# Validate the swept body, not just the centre line. A clear LOS can pass
+	# too close to a wall endpoint or diagonally across unsupported floor.
+	return _segment_walkable(from, to, level)
 
 
 func _nearest_nav(pos: Vector2, level: int) -> int:
 	var nearest := -1
 	var distance := INF
-	for id: int in _floor_node_ids.get(level, []):
+	var candidates: Dictionary = {}
+	var center := Vector2i(floor(pos.x / NAV_GRID_STEP), floor(pos.y / NAV_GRID_STEP))
+	for y in range(center.y - NAV_NEAREST_RADIUS_CELLS, center.y + NAV_NEAREST_RADIUS_CELLS + 1):
+		for x in range(center.x - NAV_NEAREST_RADIUS_CELLS, center.x + NAV_NEAREST_RADIUS_CELLS + 1):
+			var grid_key := Vector3i(x, y, level)
+			if _nav_grid_ids.has(grid_key):
+				candidates[_nav_grid_ids[grid_key]] = true
+	# Stair endpoints are sparse non-grid nodes and remain eligible even when
+	# the caller starts exactly on a landing.
+	for id: int in _stair_nav_ids.get(level, []):
+		candidates[id] = true
+	_last_nearest_nav_candidates = candidates.size()
+	for id: int in candidates:
 		var target: Vector2 = _nav_points[id]["position"]
 		var squared := target.distance_squared_to(pos)
 		if squared < distance and squared < 2.26 and _segment_walkable(pos, target, level):
@@ -321,13 +549,13 @@ func sound_cost(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> f
 		return INF
 	if from_floor == to_floor:
 		var cost := from.distance_to(to)
-		for face in wall_faces(from_floor):
+		for face in query_walls(from_floor, Rect2(from, Vector2.ZERO).expand(to)):
 			if Geometry2D.segment_intersects_segment(from, to, face["start"], face["end"]) != null:
 				cost += 2.5
 		return cost
 	# Stair mouths carry sound vertically. No broadcast to disconnected buildings.
 	var best := INF
-	for link: StairLink in stairs.values():
+	for link: StairLink in stairs_on_floor(from_floor):
 		if from_floor != link.from_floor and from_floor != link.to_floor:
 			continue
 		var next_floor := link.to_floor if from_floor == link.from_floor else link.from_floor

@@ -23,6 +23,8 @@ var points: Array[Dictionary] = []
 var active_action: Dictionary = {}
 var pack_queue: Array[Dictionary] = []
 var pre_sleep_speed := GameTime.SpeedMode.NORMAL
+var _last_hazard_check_position := Vector2(INF, INF)
+var _last_hazard_check_floor := -999
 
 
 func setup(p_world_map: WorldMap, p_player: PlayerController, p_state: PlayerState,
@@ -337,10 +339,20 @@ func _collect_contents(container: ContainerData) -> void:
 func _check_hazards() -> void:
 	if player_state.is_dead() or GameTime.simulation_scale() <= 0.0 or not player.stair_id.is_empty():
 		return
+	# Hazards are static points. Rechecking the whole interaction list while the
+	# player is idle makes dropped-loot-heavy areas needlessly expensive.
+	if (player.floor_level == _last_hazard_check_floor
+		and player.logical_position.distance_squared_to(_last_hazard_check_position) < 0.0025):
+		return
+	_last_hazard_check_position = player.logical_position
+	_last_hazard_check_floor = player.floor_level
 	for point in points:
 		if point["kind"] != "hazard" or bool(point["triggered"]) or not _reachable(point):
 			continue
 		point["triggered"] = true
+		# Presentation caches use this signal to retire the world marker without
+		# polling every interaction point every render frame.
+		points_changed.emit()
 		interrupt_action("Injured")
 		player_state.add_wound("Laceration", "left calf", 8.0, false)
 		light_injury_received.emit()
@@ -456,6 +468,16 @@ func nearby_containers() -> Array[Dictionary]:
 
 
 func _ground_container() -> String:
+	# Ground is a location, not an item. Reuse its existing pile so repeated
+	# drops cannot create an ever-growing list of overlapping containers/markers.
+	for point in points:
+		if not String(point.get("id", "")).begins_with("dropped_"):
+			continue
+		if int(point.get("floor", -999)) != player.floor_level:
+			continue
+		var point_position: Vector2 = point["position"]
+		if point_position.distance_squared_to(player.logical_position) < 0.0025:
+			return String(point["id"])
 	var id := "dropped_" + ItemStack.new_uid()
 	var container := ContainerData.new(id, "Set-down belongings")
 	container.searched = true

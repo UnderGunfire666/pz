@@ -10,6 +10,7 @@ signal state_changed(new_state: int)
 var building_id := ""
 var state := State.EXTERIOR_FULL
 var active_floor := 0
+var streamed_floor_limit := 2147483647
 var floors: Dictionary = {}
 var roofs: Array[Dictionary] = []
 var _player_position := Vector2.ZERO
@@ -26,17 +27,37 @@ func register_part(part: Dictionary) -> void:
 	var node := part["node"] as Node3D
 	if part["kind"] == "roof":
 		node.reparent(self, true)
-		roofs.append({"node": node, "visible": node.visible})
+		roofs.append({"node": node, "visible": node.visible,
+			"support_floor": int(part.get("floor", 1)) - 1})
 		return
 	var index := int(part["floor"])
-	if not floors.has(index):
-		var floor_node := BuildingFloor.new()
-		floor_node.name = "Floor_%02d" % (index + 1)
-		floor_node.floor_index = index
-		add_child(floor_node)
-		floors[index] = floor_node
+	ensure_floor(index)
 	(floors[index] as BuildingFloor).register_part(node, String(part["kind"]),
 		String(part.get("room", "")), String(part.get("stair", "")))
+
+
+func ensure_floor(index: int) -> void:
+	if floors.has(index):
+		return
+	var floor_node := BuildingFloor.new()
+	floor_node.name = "Floor_%02d" % (index + 1)
+	floor_node.floor_index = index
+	add_child(floor_node)
+	floors[index] = floor_node
+
+
+func unregister_part(node: Node3D) -> void:
+	for roof_index in range(roofs.size() - 1, -1, -1):
+		if roofs[roof_index]["node"] == node:
+			roofs.remove_at(roof_index)
+			return
+	for floor_node: BuildingFloor in floors.values():
+		if floor_node.unregister_part(node):
+			return
+
+
+func refresh_visibility() -> void:
+	_apply_visibility()
 
 
 func set_active_floor(index: int) -> void:
@@ -67,10 +88,11 @@ func set_state(new_state: State) -> void:
 	state_changed.emit(state)
 
 
-func update_local_view(index: int, position: Vector2, direction: Vector2) -> void:
+func update_local_view(index: int, position: Vector2, direction: Vector2, feet: Vector3) -> void:
 	active_floor = index
 	_player_position = position
 	_camera_direction = direction.normalized()
+	_feet = feet
 	var changed := state != State.INTERIOR
 	state = State.INTERIOR
 	_apply_visibility()
@@ -81,14 +103,16 @@ func update_local_view(index: int, position: Vector2, direction: Vector2) -> voi
 func _apply_visibility() -> void:
 	var cutaway := state != State.EXTERIOR_FULL
 	for roof in roofs:
-		(roof["node"] as Node3D).visible = bool(roof["visible"]) and not cutaway
+		(roof["node"] as Node3D).visible = (bool(roof["visible"]) and not cutaway
+			and int(roof["support_floor"]) <= streamed_floor_limit)
 	for floor_node: BuildingFloor in floors.values():
 		floor_node.viewer_room = viewer_room
 		floor_node.active_stair = active_stair
+		floor_node.visible_regions = visible_regions
 		if state == State.EXTERIOR_CUTAWAY:
 			floor_node.apply_exterior(active_floor, _feet, _view_direction, _view_distance, visible_regions)
 		else:
-			floor_node.apply_visibility(cutaway, active_floor, _player_position, _camera_direction)
+			floor_node.apply_visibility(cutaway, active_floor, _feet, _view_direction, _view_distance)
 			if cutaway and floor_node.visible:
 				for wall in floor_node.walls:
 					wall.cut_visible_regions(visible_regions, _view_direction, _view_distance)

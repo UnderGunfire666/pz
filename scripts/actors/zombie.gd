@@ -15,6 +15,7 @@ var player: PlayerController
 var player_state: PlayerState
 var world_rules: ZombieWorldRules
 var spawner: ZombieSpawner
+var simulation_active := true
 var logical_position := Vector2.ZERO
 var floor_level := 0
 var stair_id := ""
@@ -37,6 +38,8 @@ var _perception_game_seconds_left := 0.0
 var _search_step := 0
 var _damage_flash_left := 0.0
 var _navigation := LocalNavigation.new()
+var _logic_tick_interval := 0.0
+var _logic_tick_elapsed := 0.0
 
 
 func setup(p_world_map: WorldMap, p_player: PlayerController, p_player_state: PlayerState,
@@ -50,12 +53,35 @@ func setup(p_world_map: WorldMap, p_player: PlayerController, p_player_state: Pl
 	target_position = start_position
 	target_floor = start_floor
 	add_to_group("zombies")
-	NoiseBus.noise_emitted.connect(hear_noise)
+	if simulation_active and not NoiseBus.noise_emitted.is_connected(hear_noise):
+		NoiseBus.noise_emitted.connect(hear_noise)
+
+
+func set_simulation_active(active: bool) -> void:
+	simulation_active = active
+	set_process(active)
+	_logic_tick_elapsed = 0.0
+	if not active and NoiseBus.noise_emitted.is_connected(hear_noise):
+		NoiseBus.noise_emitted.disconnect(hear_noise)
+	elif active and world_map != null and not NoiseBus.noise_emitted.is_connected(hear_noise):
+		NoiseBus.noise_emitted.connect(hear_noise)
+
+
+func set_logic_tick_interval(interval: float) -> void:
+	_logic_tick_interval = maxf(0.0, interval)
+	if _logic_tick_interval <= 0.0:
+		_logic_tick_elapsed = 0.0
 
 
 func _process(delta: float) -> void:
 	if world_map == null or player == null or health <= 0 or is_queued_for_deletion(): return
 	_damage_flash_left = maxf(0.0, _damage_flash_left - delta)
+	if _logic_tick_interval > 0.0:
+		_logic_tick_elapsed += delta
+		if _logic_tick_elapsed < _logic_tick_interval:
+			return
+		delta = _logic_tick_elapsed
+		_logic_tick_elapsed = 0.0
 	var scale := GameTime.simulation_scale()
 	if scale <= 0.0 or player_state.is_dead(): return
 	var scaled_delta := delta * scale
@@ -179,15 +205,18 @@ func _set_next_search_point() -> void:
 
 
 func hear_noise(stimulus: NoiseStimulus) -> void:
-	if (world_map == null or health <= 0 or is_queued_for_deletion() or awareness == Awareness.VISUAL
+	# Dormant actors retain memory but only player proximity wakes them.
+	if (not simulation_active or world_map == null or health <= 0 or is_queued_for_deletion() or awareness == Awareness.VISUAL
 		or GameTime.simulation_scale() <= 0.0): return
+	var audible_range := maxf(0.0, stimulus.audible_range * stimulus.loudness)
+	if floor_level == stimulus.floor_level and logical_position.distance_squared_to(stimulus.world_position) > audible_range * audible_range: return
 	if stimulus.world_time < last_stimulus_time: return
 	if world_map.sound_cost(logical_position, floor_level, stimulus.world_position, stimulus.floor_level) > stimulus.audible_range * stimulus.loudness: return
 	var now := GameTime.elapsed_game_seconds
 	if now < stimulus_lock_until and stimulus.loudness <= last_stimulus_loudness * 1.25: return
 	var heard_position := stimulus.world_position
 	var heard_floor := stimulus.floor_level
-	for link: StairLink in world_map.stairs.values():
+	for link: StairLink in world_map.query_stairs(heard_floor, Rect2(heard_position, Vector2.ZERO)):
 		if link.contains(heard_position) and heard_floor in [link.from_floor, link.to_floor]:
 			heard_floor = link.to_floor if heard_floor == link.from_floor else link.from_floor
 			heard_position = link.end if heard_floor == link.to_floor else link.start

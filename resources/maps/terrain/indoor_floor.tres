@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="MapTerrainDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/map_terrain_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "indoor_floor"
+display_name = "Indoor Floor"
+category = "indoor_floor"
+passable = true
+movement_cost = 1.0
+sound_attenuation = 0.08
+supports_floor = true
+visual_recipe = "floor"

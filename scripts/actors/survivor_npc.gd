@@ -7,6 +7,7 @@ const SEARCH_GAME_SECONDS := 90.0
 
 var actor_id := "neighbour"
 var world_map: WorldMap
+var player: PlayerController
 var interactions: InteractionSystem
 var logical_position := Vector2.ZERO
 var floor_level := 0
@@ -23,10 +24,13 @@ var known_container_ids: Array[String] = []
 var _resource_point: Dictionary = {}
 var _search_progress := 0.0
 var _navigation := LocalNavigation.new()
+var _logic_tick_elapsed := 0.0
+const DISTANT_LOGIC_TICK := 0.18
 
 
-func setup(p_world_map: WorldMap, start_position: Vector2) -> void:
+func setup(p_world_map: WorldMap, start_position: Vector2, p_player: PlayerController = null) -> void:
 	world_map = p_world_map
+	player = p_player
 	logical_position = start_position
 	target_position = start_position
 	brain.traits.set_value("cautiousness", 0.78)
@@ -50,6 +54,14 @@ func setup_interactions(p_interactions: InteractionSystem) -> void:
 func _process(delta: float) -> void:
 	if world_map == null:
 		return
+	if player != null and logical_position.distance_squared_to(player.logical_position) > 100.0:
+		_logic_tick_elapsed += delta
+		if _logic_tick_elapsed < DISTANT_LOGIC_TICK:
+			return
+		delta = _logic_tick_elapsed
+		_logic_tick_elapsed = 0.0
+	else:
+		_logic_tick_elapsed = 0.0
 	var simulation_scale := GameTime.simulation_scale()
 	if simulation_scale <= 0.0:
 		return

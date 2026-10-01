@@ -7,6 +7,16 @@ const WALL_THICKNESS := 0.12
 const CAMERA_PITCH := deg_to_rad(55.0)
 const CAMERA_DISTANCE_MIN := 9.0
 const CAMERA_DISTANCE_MAX := 32.0
+# Exploration is persistent and benefits from a crisp mask. The transient FOV
+# mask is filtered by the shader, so it can be smaller without reintroducing
+# tile-shaped vision edges. This cuts the per-refresh clear/upload cost to 25%.
+const FOG_PIXELS_PER_TILE := 12
+const FOG_VISIBILITY_PIXELS_PER_TILE := 6
+const ENABLE_DYNAMIC_SHADOWS := false
+const STREAM_CHUNK_SIZE := 8
+const STREAM_CHUNK_RADIUS := 2
+const MAX_CACHED_STREAM_CHUNKS := 48
+const EXPLORATION_FOG_SHADER = preload("res://shaders/exploration_fog.gdshader")
 
 var world_map: WorldMap
 var player: PlayerController
@@ -29,13 +39,26 @@ var _last_visibility_context: Array = []
 var _region_revision := -1
 var _visible_content_regions: Array[AABB] = []
 var interaction_markers: Array[Dictionary] = []
+var _last_marker_visibility_revision := -1
 var actor_visuals: Dictionary = {}
+var _actor_visibility_cache: Dictionary = {}
 var fog_overlays: Dictionary = {}
+var fog_masks: Dictionary = {}
 var _floor_openings: Dictionary = {}
 var _last_fog_revision := -1
+var _pending_exploration: Dictionary = {}
+var _reset_exploration := true
 var _environment: Environment
 var _sun: DirectionalLight3D
+var _last_lighting_daylight := -1.0
 var _camera_height := 0.0
+var _streamed_floor_chunks: Dictionary = {}
+var _empty_stream_chunks: Dictionary = {}
+var _stream_chunk_clock := 0
+var _stream_center := Vector2i(999999, 999999)
+var _stream_radius := -1
+var _stream_floor := -999
+var _building_controllers_ready := false
 var _floor_material := _material(Color("393a34"))
 var _wall_material := _material(Color("686057"))
 var _grass_material := _material(Color("49694b"))
@@ -65,6 +88,10 @@ func setup(
 	player = p_player
 	actor_layer = p_actor_layer
 	visibility = p_visibility
+	visibility.tile_explored.connect(func(key: Vector3i) -> void: _pending_exploration[key] = true)
+	visibility.exploration_restored.connect(func() -> void:
+		_reset_exploration = true
+		_last_fog_revision = -1)
 	interactions = p_interactions
 	_build_environment()
 	_build_map()
@@ -72,7 +99,7 @@ func setup(
 	interactions.points_changed.connect(_refresh_interaction_markers)
 	_build_camera()
 	_build_visibility_controllers()
-	_build_demo_occluders()
+	_build_authored_occluders()
 	for controller: BuildingVisibilityController in building_controllers.values():
 		occlusion_system.register_zone(OcclusionZone.new(OcclusionZone.node_bounds(controller), controller))
 	for prop in small_occluders:
@@ -86,11 +113,20 @@ func _process(delta: float) -> void:
 	if player == null:
 		return
 	_update_camera(delta)
+	_refresh_streamed_floor_chunks()
 	_update_structure_visibility()
+	_update_wall_fades(delta)
 	_update_lighting()
 	_update_fog()
 	_update_interaction_markers()
 	_update_actors()
+
+
+func _update_wall_fades(delta: float) -> void:
+	for controller: BuildingVisibilityController in building_controllers.values():
+		for floor_node: BuildingFloor in controller.floors.values():
+			for wall: OccludableWall in floor_node.walls:
+				wall.advance_fade(delta)
 
 
 func orbit_camera(mouse_delta: Vector2) -> void:
@@ -107,7 +143,7 @@ func input_to_logical(screen_input: Vector2) -> Vector2:
 func mouse_to_logical(mouse_position: Vector2, floor_level: int = 0) -> Vector2:
 	if camera == null:
 		return player.logical_position + player.facing_direction
-	var elevation := float(floor_level) * WorldMap.FLOOR_HEIGHT
+	var elevation := float(floor_level) * world_map.floor_height
 	if floor_level == player.floor_level:
 		elevation = world_map.elevation_at(player.logical_position, floor_level, player.stair_id)
 	var hit: Variant = Plane(Vector3.UP, elevation).intersects_ray(
@@ -134,13 +170,20 @@ func _build_environment() -> void:
 	add_child(environment_node)
 	_sun = DirectionalLight3D.new()
 	_sun.rotation_degrees = Vector3(-52.0, -34.0, 0.0)
-	_sun.shadow_enabled = true
+	# The orthographic MVP already communicates depth through elevation, fog and
+	# cutaways. A full directional shadow map costs a render pass over every
+	# visible wall/prop each frame, so keep it opt-in for a later visual-polish
+	# profile rather than taxing the default gameplay renderer.
+	_sun.shadow_enabled = ENABLE_DYNAMIC_SHADOWS
 	add_child(_sun)
 	_update_lighting()
 
 
 func _update_lighting() -> void:
 	var daylight := world_map.ambient_light()
+	if absf(daylight - _last_lighting_daylight) < 0.001:
+		return
+	_last_lighting_daylight = daylight
 	_environment.ambient_light_energy = lerpf(0.12, 0.65, daylight)
 	_environment.background_color = Color("101a28").lerp(Color("424e59"), daylight)
 	_sun.light_energy = lerpf(0.08, 1.1, daylight)
@@ -151,9 +194,9 @@ func _build_map() -> void:
 	var ground := MeshInstance3D.new()
 	ground.name = "GroundBackdrop"
 	var ground_mesh := PlaneMesh.new()
-	ground_mesh.size = Vector2(WorldMap.WIDTH + 12.0, WorldMap.HEIGHT + 12.0)
+	ground_mesh.size = Vector2(world_map.width + 12.0, world_map.height + 12.0)
 	ground.mesh = ground_mesh
-	ground.position = Vector3(WorldMap.WIDTH * 0.5, -0.22, WorldMap.HEIGHT * 0.5)
+	ground.position = Vector3(world_map.width * 0.5, -0.22, world_map.height * 0.5)
 	ground.material_override = _floor_material
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ground)
@@ -166,19 +209,8 @@ func _build_map() -> void:
 		openings.append(PackedVector2Array([low - side, high - side, high + side, low + side]))
 		_floor_openings[stair.to_floor] = openings
 	for floor_level in world_map.floor_levels():
-		for y in range(WorldMap.HEIGHT):
-			for x in range(WorldMap.WIDTH):
-				var cell := Vector2i(x, y)
-				var tile := world_map.get_tile_at(cell, floor_level)
-				if tile != null:
-					_add_tile(cell, tile, floor_level)
-		for face in world_map.wall_faces(floor_level):
-			_add_wall_face(face, floor_level)
 		_create_fog_overlay(floor_level)
-	for building_value in world_map.buildings.values():
-		_add_roof(building_value as BuildingData)
-	for stair in world_map.stairs.values():
-		_add_stair_mesh(stair)
+	_refresh_streamed_floor_chunks(true)
 
 
 func _tile_polygons(cell: Vector2i, floor_level: int) -> Array[PackedVector2Array]:
@@ -202,33 +234,223 @@ func _add_polygon(surface: SurfaceTool, polygon: PackedVector2Array, height: flo
 		surface.add_vertex(Vector3(point.x, height, point.y))
 
 
-func _add_tile(cell: Vector2i, tile: WorldTileData, floor_level: int) -> void:
-	var polygons := _tile_polygons(cell, floor_level)
-	if polygons.is_empty():
+func _add_fog_polygon(surface: SurfaceTool, polygon: PackedVector2Array, height: float) -> void:
+	var map_size := Vector2(float(world_map.width), float(world_map.height))
+	for index in Geometry2D.triangulate_polygon(polygon):
+		var point := polygon[index]
+		surface.set_normal(Vector3.UP)
+		surface.set_uv(point / map_size)
+		surface.add_vertex(Vector3(point.x, height, point.y))
+
+
+func _add_building_floor_batches(floor_level: int) -> void:
+	# Kept as a focused construction helper for editor/tests. Runtime floor
+	# creation goes through _load_streamed_floor_chunk() so the same room batches
+	# can be cached and evicted with outdoor terrain.
+	var batches: Dictionary = {}
+	for y in range(world_map.height):
+		for x in range(world_map.width):
+			var cell := Vector2i(x, y)
+			var tile := world_map.get_tile_at(cell, floor_level)
+			if tile == null or tile.building_id.is_empty():
+				continue
+			var material_kind := _floor_material_kind(tile.kind)
+			var batch_key := "%s|%s|%s" % [tile.building_id, tile.room_id, material_kind]
+			if not batches.has(batch_key):
+				var surface := SurfaceTool.new()
+				surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+				batches[batch_key] = {"surface": surface, "building": tile.building_id,
+					"room": tile.room_id, "material_kind": material_kind}
+			for polygon in _tile_polygons(cell, floor_level):
+				_add_polygon((batches[batch_key] as Dictionary)["surface"] as SurfaceTool, polygon,
+					float(floor_level) * world_map.floor_height)
+	for batch_key in batches:
+		var batch: Dictionary = batches[batch_key]
+		var instance := MeshInstance3D.new()
+		instance.name = "Floor_%s" % String(batch_key).replace("|", "_")
+		instance.mesh = (batch["surface"] as SurfaceTool).commit()
+		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		instance.material_override = _floor_material_for_kind(String(batch["material_kind"]))
+		add_child(instance)
+		structure_parts.append({"node": instance, "floor": floor_level,
+			"building": String(batch["building"]), "kind": "floor", "room": String(batch["room"])})
+
+
+func _refresh_streamed_floor_chunks(force: bool = false) -> void:
+	if world_map == null or player == null:
 		return
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for polygon in polygons:
-		_add_polygon(surface, polygon, float(floor_level) * WorldMap.FLOOR_HEIGHT)
-	var instance := MeshInstance3D.new()
-	instance.name = "Floor_%d_Tile_%d_%d" % [floor_level, cell.x, cell.y]
-	instance.mesh = surface.commit()
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	match tile.kind:
-		"road":
-			instance.material_override = _road_material
-		"floor", "wall", "stairs":
-			instance.material_override = _indoor_material
-		"door":
-			instance.material_override = _door_material
-		_:
-			instance.material_override = _grass_material
-	add_child(instance)
-	structure_parts.append({"node": instance, "floor": floor_level, "building": tile.building_id,
-		"kind": "floor", "room": tile.room_id})
+	var center := Vector2i(floor(player.logical_position.x / STREAM_CHUNK_SIZE),
+		floor(player.logical_position.y / STREAM_CHUNK_SIZE))
+	var radius := STREAM_CHUNK_RADIUS
+	var display_floor := world_map.display_floor_at(player.logical_position, player.floor_level, player.stair_id)
+	if camera != null:
+		var viewport_size := get_viewport().get_visible_rect().size
+		var half_height := camera.size * 0.5
+		var half_width := half_height * viewport_size.x / maxf(1.0, viewport_size.y)
+		var extent := Vector2(half_width, half_height / sin(CAMERA_PITCH)).length()
+		extent += absf(_camera_height + 0.6) / tan(CAMERA_PITCH)
+		radius = maxi(radius, int(ceil(extent / float(STREAM_CHUNK_SIZE))))
+	if not force and center == _stream_center and radius == _stream_radius and display_floor == _stream_floor:
+		return
+	_stream_center = center
+	_stream_radius = radius
+	_stream_floor = display_floor
+	_stream_chunk_clock += 1
+	var desired: Dictionary = {}
+	for floor_level in world_map.floor_levels():
+		if floor_level > display_floor:
+			continue
+		for chunk_y in range(center.y - radius, center.y + radius + 1):
+			for chunk_x in range(center.x - radius, center.x + radius + 1):
+				if chunk_x < 0 or chunk_y < 0:
+					continue
+				if chunk_x * STREAM_CHUNK_SIZE >= world_map.width or chunk_y * STREAM_CHUNK_SIZE >= world_map.height:
+					continue
+				var key := Vector3i(floor_level, chunk_x, chunk_y)
+				if _empty_stream_chunks.has(key):
+					continue
+				if not _streamed_floor_chunks.has(key):
+					_load_streamed_floor_chunk(key)
+				if not _streamed_floor_chunks.has(key):
+					continue
+				desired[key] = true
+				var entry: Dictionary = _streamed_floor_chunks[key]
+				entry["last_used"] = _stream_chunk_clock
+				for node: Node3D in entry["nodes"]:
+					node.visible = true
+	# Streaming restores residency first; architectural cutaways own final
+	# visibility. In particular a cached ground chunk must not resurrect a roof.
+	if _building_controllers_ready:
+		for controller: BuildingVisibilityController in building_controllers.values():
+			controller.streamed_floor_limit = display_floor
+			controller.refresh_visibility()
+		_last_visibility_context = []
+	for key in _streamed_floor_chunks:
+		if desired.has(key):
+			continue
+		var entry: Dictionary = _streamed_floor_chunks[key]
+		for node: Node3D in entry["nodes"]:
+			node.visible = false
+	_evict_distant_stream_chunks(desired)
 
 
-func _add_wall_face(face: Dictionary, floor_level: int) -> void:
+func _load_streamed_floor_chunk(key: Vector3i) -> void:
+	var floor_level := key.x
+	var start := Vector2i(key.y * STREAM_CHUNK_SIZE, key.z * STREAM_CHUNK_SIZE)
+	var end := Vector2i(mini(start.x + STREAM_CHUNK_SIZE, world_map.width),
+		mini(start.y + STREAM_CHUNK_SIZE, world_map.height))
+	var batches: Dictionary = {}
+	for y in range(start.y, end.y):
+		for x in range(start.x, end.x):
+			var tile := world_map.get_tile_at(Vector2i(x, y), floor_level)
+			if tile == null:
+				continue
+			var material_kind := _floor_material_kind(tile.kind)
+			# Keep every room in its own batch. Its node is independently owned by
+			# BuildingFloor, so floor slicing and concealed-room materials continue
+			# to work after the chunk is unloaded and later rebuilt.
+			var building_id := String(tile.building_id)
+			var room_id := String(tile.room_id)
+			var batch_key := material_kind if building_id.is_empty() else "%s|%s|%s" % [building_id, room_id, material_kind]
+			if not batches.has(batch_key):
+				var surface := SurfaceTool.new()
+				surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+				batches[batch_key] = {"surface": surface, "building": building_id,
+					"room": room_id, "material_kind": material_kind}
+			for polygon in _tile_polygons(Vector2i(x, y), floor_level):
+				_add_polygon((batches[batch_key] as Dictionary)["surface"] as SurfaceTool, polygon,
+					float(floor_level) * world_map.floor_height)
+	var nodes: Array[Node3D] = []
+	var parts: Array[Dictionary] = []
+	if batches.is_empty():
+		_empty_stream_chunks[key] = true
+		return
+	for batch_key in batches:
+		var batch: Dictionary = batches[batch_key]
+		var instance := MeshInstance3D.new()
+		instance.name = "StreamedFloor_%d_%d_%d_%s" % [floor_level, key.y, key.z, String(batch_key).replace("|", "_")]
+		instance.mesh = (batch["surface"] as SurfaceTool).commit()
+		instance.material_override = _floor_material_for_kind(String(batch["material_kind"]))
+		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(instance)
+		nodes.append(instance)
+		if not String(batch["building"]).is_empty():
+			var part := {"node": instance, "floor": floor_level,
+				"building": String(batch["building"]), "kind": "floor", "room": String(batch["room"])}
+			parts.append(part)
+			structure_parts.append(part)
+			if _building_controllers_ready:
+				_register_structure_part(part)
+	# Walls are assigned by their midpoint, so one face belongs to exactly one
+	# cache entry even where a room lies on a chunk boundary.
+	var chunk_rect := Rect2(Vector2(start), Vector2(end - start))
+	for face: Dictionary in world_map.query_walls(floor_level, chunk_rect):
+		var midpoint: Vector2 = (face["start"] + face["end"]) * 0.5
+		if Vector2i(floor(midpoint.x / STREAM_CHUNK_SIZE), floor(midpoint.y / STREAM_CHUNK_SIZE)) != Vector2i(key.y, key.z):
+			continue
+		_add_wall_face(face, floor_level, nodes, parts)
+	# Roof ownership is tied to its building's ground-floor chunk. This keeps a
+	# single roof instance while ground-floor streaming remains present whenever
+	# a player occupies any higher level of that building.
+	if floor_level == 0:
+		for building_value in world_map.buildings.values():
+			var building := building_value as BuildingData
+			var building_center := building.bounds.get_center()
+			if Vector2i(floor(building_center.x / STREAM_CHUNK_SIZE), floor(building_center.y / STREAM_CHUNK_SIZE)) != Vector2i(key.y, key.z):
+				continue
+			_add_roof(building, nodes, parts)
+	for stair_value in world_map.stairs.values():
+		var stair: RefCounted = stair_value
+		if int(stair.from_floor) != floor_level:
+			continue
+		var stair_chunk := Vector2i(floor(stair.start.x / STREAM_CHUNK_SIZE), floor(stair.start.y / STREAM_CHUNK_SIZE))
+		if stair_chunk != Vector2i(key.y, key.z):
+			continue
+		_add_stair_mesh(stair, nodes, parts)
+	_streamed_floor_chunks[key] = {"nodes": nodes, "parts": parts, "last_used": _stream_chunk_clock}
+
+
+func _evict_distant_stream_chunks(desired: Dictionary) -> void:
+	# Visible chunks are mandatory; the cache budget may grow with the viewport.
+	while _streamed_floor_chunks.size() > maxi(MAX_CACHED_STREAM_CHUNKS, desired.size()):
+		var candidate: Variant = null
+		var oldest := INF
+		for key in _streamed_floor_chunks:
+			if desired.has(key):
+				continue
+			var last_used := int((_streamed_floor_chunks[key] as Dictionary)["last_used"])
+			if last_used < oldest:
+				oldest = last_used
+				candidate = key
+		if candidate == null:
+			return
+		var entry: Dictionary = _streamed_floor_chunks[candidate]
+		for part: Dictionary in entry.get("parts", []):
+			_unregister_structure_part(part)
+			structure_parts.erase(part)
+		for node: Node3D in entry["nodes"]:
+			node.queue_free()
+		_streamed_floor_chunks.erase(candidate)
+
+
+func _floor_material_kind(kind: String) -> String:
+	match kind:
+		"road", "asphalt", "concrete": return "road"
+		"floor", "wall", "stairs", "indoor_floor": return "indoor"
+		"door": return "door"
+		_: return "grass"
+
+
+func _floor_material_for_kind(kind: String) -> Material:
+	match kind:
+		"road": return _road_material
+		"indoor": return _indoor_material
+		"door": return _door_material
+		_: return _grass_material
+
+
+func _add_wall_face(face: Dictionary, floor_level: int, nodes: Array[Node3D] = [],
+		parts: Array[Dictionary] = []) -> void:
 	var start: Vector2 = face["start"]
 	var end: Vector2 = face["end"]
 	var midpoint := (start + end) * 0.5
@@ -237,14 +459,19 @@ func _add_wall_face(face: Dictionary, floor_level: int) -> void:
 	var mesh := BoxMesh.new()
 	mesh.size = Vector3(direction.length(), WALL_HEIGHT, WALL_THICKNESS)
 	instance.mesh = mesh
-	instance.position = Vector3(midpoint.x, float(floor_level) * WorldMap.FLOOR_HEIGHT + WALL_HEIGHT * 0.5, midpoint.y)
+	instance.position = Vector3(midpoint.x, float(floor_level) * world_map.floor_height + WALL_HEIGHT * 0.5, midpoint.y)
 	instance.rotation.y = -direction.angle()
 	instance.material_override = _wall_material
 	add_child(instance)
-	structure_parts.append({"node": instance, "floor": floor_level, "building": String(face["building_id"]), "kind": "wall"})
+	nodes.append(instance)
+	var part := {"node": instance, "floor": floor_level, "building": String(face["building_id"]), "kind": "wall"}
+	parts.append(part)
+	structure_parts.append(part)
+	if _building_controllers_ready:
+		_register_structure_part(part)
 
 
-func _add_roof(building: BuildingData) -> void:
+func _add_roof(building: BuildingData, nodes: Array[Node3D] = [], parts: Array[Dictionary] = []) -> void:
 	var instance := MeshInstance3D.new()
 	instance.name = "%s_Roof" % building.id
 	var mesh := BoxMesh.new()
@@ -252,23 +479,27 @@ func _add_roof(building: BuildingData) -> void:
 	instance.mesh = mesh
 	instance.position = Vector3(
 		building.bounds.position.x + building.bounds.size.x * 0.5,
-		building.floor_count * WorldMap.FLOOR_HEIGHT + 0.04,
+		building.floor_count * world_map.floor_height + 0.04,
 		building.bounds.position.y + building.bounds.size.y * 0.5
 	)
 	instance.material_override = _roof_material
 	add_child(instance)
-	structure_parts.append({"node": instance, "floor": building.floor_count, "building": building.id,
-		"kind": "roof"})
+	nodes.append(instance)
+	var part := {"node": instance, "floor": building.floor_count, "building": building.id, "kind": "roof"}
+	parts.append(part)
+	structure_parts.append(part)
+	if _building_controllers_ready:
+		_register_structure_part(part)
 
 
-func _add_stair_mesh(stair: RefCounted) -> void:
+func _add_stair_mesh(stair: RefCounted, nodes: Array[Node3D] = [], parts: Array[Dictionary] = []) -> void:
 	var root := Node3D.new()
 	root.name = "%s_Stair" % stair.id
 	add_child(root)
 	var direction: Vector2 = (stair.end - stair.start).normalized()
 	var length: float = stair.start.distance_to(stair.end)
-	var base: float = float(stair.from_floor) * WorldMap.FLOOR_HEIGHT
-	var rise: float = float(stair.to_floor - stair.from_floor) * WorldMap.FLOOR_HEIGHT
+	var base: float = float(stair.from_floor) * world_map.floor_height
+	var rise: float = float(stair.to_floor - stair.from_floor) * world_map.floor_height
 	var steps := maxi(8, int(ceil(rise / 0.22)))
 	for step in range(steps):
 		var progress := (float(step) + 0.5) / float(steps)
@@ -290,8 +521,13 @@ func _add_stair_mesh(stair: RefCounted) -> void:
 			var point: Vector2 = rail_start.lerp(rail_end, progress)
 			_add_beam(root, Vector3(point.x, base + rise * progress, point.y), Vector3(point.x, base + rise * progress + 0.65, point.y))
 	var stair_tile := world_map.get_tile(stair.start, int(stair.from_floor))
-	structure_parts.append({"node": root, "floor": int(stair.from_floor), "building": String(stair.building_id),
-		"kind": "stairs", "room": stair_tile.room_id if stair_tile != null else "", "stair": stair.id})
+	nodes.append(root)
+	var part := {"node": root, "floor": int(stair.from_floor), "building": String(stair.building_id),
+		"kind": "stairs", "room": stair_tile.room_id if stair_tile != null else "", "stair": stair.id}
+	parts.append(part)
+	structure_parts.append(part)
+	if _building_controllers_ready:
+		_register_structure_part(part)
 
 
 func _add_beam(parent: Node3D, start: Vector3, end: Vector3) -> void:
@@ -346,7 +582,7 @@ func _build_interaction_markers() -> void:
 		beacon.material_override = material
 		var logical_position: Vector2 = point["position"]
 		var floor_level := int(point.get("floor", 0))
-		root.position = Vector3(logical_position.x, float(floor_level) * WorldMap.FLOOR_HEIGHT, logical_position.y)
+		root.position = Vector3(logical_position.x, float(floor_level) * world_map.floor_height, logical_position.y)
 		add_child(root)
 		interaction_markers.append({"node": root, "point": point})
 
@@ -355,10 +591,14 @@ func _refresh_interaction_markers() -> void:
 	for marker in interaction_markers:
 		(marker["node"] as Node3D).queue_free()
 	interaction_markers.clear()
+	_last_marker_visibility_revision = -1
 	_build_interaction_markers()
 
 
 func _update_interaction_markers() -> void:
+	if _last_marker_visibility_revision == visibility.revision:
+		return
+	_last_marker_visibility_revision = visibility.revision
 	for marker in interaction_markers:
 		var point: Dictionary = marker["point"]
 		(marker["node"] as Node3D).visible = (
@@ -397,16 +637,42 @@ func _update_camera(delta: float) -> void:
 
 func _build_visibility_controllers() -> void:
 	for part in structure_parts:
-		var id := String(part["building"])
-		if id.is_empty():
+		_register_structure_part(part)
+	# Streamed upper floors may not yet have mesh nodes. Keep their presentation
+	# state objects alive so floor slicing remains deterministic before the player
+	# enters their chunks.
+	for building_value in world_map.buildings.values():
+		var building := building_value as BuildingData
+		var controller := building_controllers.get(building.id) as BuildingVisibilityController
+		if controller == null:
 			continue
-		if not building_controllers.has(id):
-			var controller := BuildingVisibilityController.new()
-			controller.name = id + "_Visibility"
-			controller.building_id = id
-			add_child(controller)
-			building_controllers[id] = controller
-		(building_controllers[id] as BuildingVisibilityController).register_part(part)
+		for floor_index in range(building.floor_count):
+			controller.ensure_floor(floor_index)
+	_building_controllers_ready = true
+	for controller: BuildingVisibilityController in building_controllers.values():
+		controller.refresh_visibility()
+
+
+func _register_structure_part(part: Dictionary) -> void:
+	var id := String(part["building"])
+	if id.is_empty():
+		return
+	if not building_controllers.has(id):
+		var controller := BuildingVisibilityController.new()
+		controller.name = id + "_Visibility"
+		controller.building_id = id
+		add_child(controller)
+		building_controllers[id] = controller
+	var controller := building_controllers[id] as BuildingVisibilityController
+	controller.streamed_floor_limit = _stream_floor
+	controller.register_part(part)
+
+
+func _unregister_structure_part(part: Dictionary) -> void:
+	var id := String(part.get("building", ""))
+	if id.is_empty() or not building_controllers.has(id):
+		return
+	(building_controllers[id] as BuildingVisibilityController).unregister_part(part["node"] as Node3D)
 
 
 func _on_local_player_moved(_position: Vector2) -> void:
@@ -432,6 +698,8 @@ func _update_structure_visibility() -> void:
 		var stair: RefCounted = world_map.stairs[player.stair_id]
 		player_building = stair.building_id
 	var direction := Vector3(sin(camera_yaw) * cos(CAMERA_PITCH), sin(CAMERA_PITCH), cos(camera_yaw) * cos(CAMERA_PITCH))
+	var feet := Vector3(player.logical_position.x,
+		world_map.elevation_at(player.logical_position, player.floor_level, player.stair_id), player.logical_position.y)
 	var content_tile := world_map.get_tile(player.logical_position, highest_visible_floor)
 	var current_room := content_tile.room_id if content_tile != null else ""
 	if player_building != _active_building_id:
@@ -445,9 +713,7 @@ func _update_structure_visibility() -> void:
 		(building_controllers[player_building] as BuildingVisibilityController).configure_content(
 			current_room, player.stair_id, _visible_content_regions, direction, camera_distance + 1.0)
 		(building_controllers[player_building] as BuildingVisibilityController).update_local_view(
-			highest_visible_floor, player.logical_position, Vector2(sin(camera_yaw), cos(camera_yaw)))
-	var feet := Vector3(player.logical_position.x,
-		world_map.elevation_at(player.logical_position, player.floor_level, player.stair_id), player.logical_position.y)
+			highest_visible_floor, player.logical_position, Vector2(sin(camera_yaw), cos(camera_yaw)), feet)
 	occlusion_system.update_view(player_building, highest_visible_floor, feet, direction,
 		camera_distance + 1.0, _player_reveal_rect(feet), _visible_content_regions)
 	if _display_floor != highest_visible_floor:
@@ -467,29 +733,28 @@ func _update_visible_content_regions() -> void:
 	if polygon.size() < 3:
 		return
 	var floor_index := visibility.viewer_floor
-	for y in range(WorldMap.HEIGHT):
-		for x in range(WorldMap.WIDTH):
-			var cell := Vector2i(x, y)
-			var center := Vector2(cell) + Vector2(0.5, 0.5)
-			if world_map.get_tile_at(cell, floor_index) == null or not visibility.room_contents_allowed(center, floor_index):
-				continue
-			if center.distance_to(visibility.viewer_position) > visibility.vision_radius + 0.71:
-				continue
-			for tile_polygon in _tile_polygons(cell, floor_index):
-				for fragment in Geometry2D.intersect_polygons(tile_polygon, polygon):
-					if fragment.size() < 3:
-						continue
-					var rect := Rect2(fragment[0], Vector2.ZERO)
-					for point in fragment:
-						rect = rect.expand(point)
-					if not visibility.can_see_position(rect.get_center(), floor_index):
-						continue
-					# Insets avoid treating contact at a rear wall as occlusion.
-					if rect.size.x <= 0.04 or rect.size.y <= 0.04:
-						continue
-					rect = rect.grow(-0.02)
-					_visible_content_regions.append(AABB(Vector3(rect.position.x,
-						floor_index * WorldMap.FLOOR_HEIGHT + 0.03, rect.position.y), Vector3(rect.size.x, 1.85, rect.size.y)))
+	# This is the exact set accepted by refresh(), rather than a rectangular
+	# radius scan which becomes increasingly wasteful as map dimensions grow.
+	for key_value in visibility.visible_tiles:
+		var key: Vector3i = key_value
+		if key.z != floor_index:
+			continue
+		var cell := Vector2i(key.x, key.y)
+		for tile_polygon in _tile_polygons(cell, floor_index):
+			for fragment in Geometry2D.intersect_polygons(tile_polygon, polygon):
+				if fragment.size() < 3:
+					continue
+				var rect := Rect2(fragment[0], Vector2.ZERO)
+				for point in fragment:
+					rect = rect.expand(point)
+				if not visibility.can_see_position(rect.get_center(), floor_index):
+					continue
+				# Insets avoid treating contact at a rear wall as occlusion.
+				if rect.size.x <= 0.04 or rect.size.y <= 0.04:
+					continue
+				rect = rect.grow(-0.02)
+				_visible_content_regions.append(AABB(Vector3(rect.position.x,
+					floor_index * world_map.floor_height + 0.03, rect.position.y), Vector3(rect.size.x, 1.85, rect.size.y)))
 
 
 func _player_reveal_rect(feet: Vector3) -> Vector4:
@@ -503,12 +768,19 @@ func _player_reveal_rect(feet: Vector3) -> Vector4:
 	return Vector4(center.x, center.y, size.x, size.y)
 
 
-func _build_demo_occluders() -> void:
-	# Render-only placeholders for exercising the reusable prop component.
+func _build_authored_occluders() -> void:
+	for decoration: MapDecorationDefinition in world_map.definition.decorations:
+		if decoration.kind == "road_sign":
+			_add_road_sign(decoration)
+		elif decoration.kind == "tree":
+			_add_tree(decoration)
+
+
+func _add_road_sign(decoration: MapDecorationDefinition) -> void:
 	var sign := SmallOccluder.new()
-	sign.name = "RoadSign"
+	sign.name = decoration.id
 	add_child(sign)
-	sign.position = Vector3(7.3, 0, 7.0)
+	sign.position = world_map.definition.logical_to_world(decoration.position, decoration.level)
 	var post := MeshInstance3D.new()
 	var post_mesh := CylinderMesh.new()
 	post_mesh.top_radius = 0.05
@@ -528,10 +800,13 @@ func _build_demo_occluders() -> void:
 	sign.add_child(board)
 	sign.register_mesh(board)
 	small_occluders.append(sign)
+
+
+func _add_tree(decoration: MapDecorationDefinition) -> void:
 	var tree := SmallOccluder.new()
-	tree.name = "StreetTree"
+	tree.name = decoration.id
 	add_child(tree)
-	tree.position = Vector3(0.9, 0, 7.5)
+	tree.position = world_map.definition.logical_to_world(decoration.position, decoration.level)
 	var trunk := MeshInstance3D.new()
 	var trunk_mesh := CylinderMesh.new()
 	trunk_mesh.top_radius = 0.12
@@ -557,43 +832,125 @@ func _build_demo_occluders() -> void:
 func _create_fog_overlay(floor_level: int) -> void:
 	var fog := MeshInstance3D.new()
 	fog.name = "Floor_%d_VisionFog" % floor_level
-	var material := _material(Color.WHITE, true)
-	material.vertex_color_use_as_albedo = true
+	var image := Image.create(world_map.width * FOG_PIXELS_PER_TILE,
+		world_map.height * FOG_PIXELS_PER_TILE, false, Image.FORMAT_RGBA8)
+	image.fill(Color.BLACK)
+	var texture := ImageTexture.create_from_image(image)
+	var visibility_image := Image.create(world_map.width * FOG_VISIBILITY_PIXELS_PER_TILE,
+		world_map.height * FOG_VISIBILITY_PIXELS_PER_TILE, false, Image.FORMAT_RGBA8)
+	visibility_image.fill(Color.BLACK)
+	var visibility_texture := ImageTexture.create_from_image(visibility_image)
+	var material := ShaderMaterial.new()
+	material.shader = EXPLORATION_FOG_SHADER
+	material.set_shader_parameter("exploration_mask", texture)
+	material.set_shader_parameter("visibility_mask", visibility_texture)
+	var image_size := image.get_size()
+	material.set_shader_parameter("texel_size", Vector2(1.0 / float(image_size.x), 1.0 / float(image_size.y)))
 	material.render_priority = 2
 	fog.material_override = material
 	fog.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Geometry is static.  The two masks contain the changing exploration/FOV
+	# state, avoiding a full SurfaceTool rebuild every visibility refresh.
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for y in range(world_map.height):
+		for x in range(world_map.width):
+			var cell := Vector2i(x, y)
+			if world_map.get_tile_at(cell, floor_level) == null:
+				continue
+			for polygon in _tile_polygons(cell, floor_level):
+				_add_fog_polygon(surface, polygon, float(floor_level) * world_map.floor_height + 0.018)
+	fog.mesh = surface.commit()
 	add_child(fog)
 	fog_overlays[floor_level] = fog
+	fog_masks[floor_level] = {
+		"image": image,
+		"texture": texture,
+		"visibility_image": visibility_image,
+		"visibility_texture": visibility_texture,
+		"seen_tiles": {},
+		"had_visibility": false,
+	}
 
 
 func _update_fog() -> void:
 	if visibility.revision == _last_fog_revision:
 		return
 	_last_fog_revision = visibility.revision
+	if _reset_exploration:
+		_pending_exploration = visibility.seen_tiles.duplicate()
 	for floor_level in world_map.floor_levels():
-		var surface := SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var has_vertices := false
-		for y in range(WorldMap.HEIGHT):
-			for x in range(WorldMap.WIDTH):
-				var cell := Vector2i(x, y)
-				if world_map.get_tile_at(cell, floor_level) == null:
-					continue
-				var room_allowed := visibility.room_contents_allowed(Vector2(cell) + Vector2(0.5, 0.5), floor_level)
-				var seen := visibility.was_tile_seen(cell, floor_level)
-				var fog_color := Color(0.025, 0.045, 0.07, 0.46 if seen else 0.9)
-				if not room_allowed:
-					fog_color = Color(0.018, 0.023, 0.03, 1.0)
-				for tile_polygon in _tile_polygons(cell, floor_level):
-					var obscured: Array[PackedVector2Array] = [tile_polygon]
-					if room_allowed and floor_level == player.floor_level and visibility.visible_world_polygon.size() >= 3:
-						obscured = Geometry2D.clip_polygons(tile_polygon, visibility.visible_world_polygon)
-					for polygon in obscured:
-						if polygon.size() >= 3:
-							_add_polygon(surface, polygon, float(floor_level) * WorldMap.FLOOR_HEIGHT + 0.018, fog_color)
-							has_vertices = true
-		var fog: MeshInstance3D = fog_overlays[floor_level]
-		fog.mesh = surface.commit() if has_vertices else null
+		_update_fog_mask(floor_level)
+	_pending_exploration.clear()
+	_reset_exploration = false
+
+
+func _update_fog_mask(floor_level: int) -> void:
+	var entry: Dictionary = fog_masks[floor_level]
+	var image := entry["image"] as Image
+	var visible_image := entry["visibility_image"] as Image
+	var seen_tiles: Dictionary = entry["seen_tiles"] as Dictionary
+	var exploration_changed := _reset_exploration
+	if _reset_exploration:
+		image.fill(Color.BLACK)
+		seen_tiles.clear()
+	for key_value in _pending_exploration:
+		var key: Vector3i = key_value
+		if key.z != floor_level:
+			continue
+		image.fill_rect(Rect2i(key.x * FOG_PIXELS_PER_TILE, key.y * FOG_PIXELS_PER_TILE,
+			FOG_PIXELS_PER_TILE, FOG_PIXELS_PER_TILE), Color.WHITE)
+		seen_tiles[key] = true
+		exploration_changed = true
+	if floor_level == visibility.viewer_floor:
+		visible_image.fill(Color.BLACK)
+		_rasterize_visibility(visible_image, floor_level, FOG_VISIBILITY_PIXELS_PER_TILE)
+		entry["had_visibility"] = true
+		(entry["visibility_texture"] as ImageTexture).update(visible_image)
+	elif bool(entry["had_visibility"]):
+		visible_image.fill(Color.BLACK)
+		entry["had_visibility"] = false
+		(entry["visibility_texture"] as ImageTexture).update(visible_image)
+	if exploration_changed:
+		(entry["texture"] as ImageTexture).update(image)
+
+
+func _rasterize_visibility(image: Image, floor_level: int, pixels_per_tile: int) -> void:
+	# Scan-convert the wall-clipped contour at sub-tile resolution. Whole white
+	# tile squares would restore the jagged FOV edge removed by earlier work.
+	var polygon := visibility.visible_world_polygon
+	if polygon.size() < 3:
+		return
+	var scale_factor := float(pixels_per_tile)
+	var min_y := image.get_height()
+	var max_y := 0
+	for point in polygon:
+		min_y = mini(min_y, int(floor(point.y * scale_factor)))
+		max_y = maxi(max_y, int(ceil(point.y * scale_factor)))
+	for row in range(maxi(0, min_y), mini(image.get_height(), max_y)):
+		var y := (float(row) + 0.5) / scale_factor
+		var crossings: Array[float] = []
+		var previous := polygon[polygon.size() - 1]
+		for point in polygon:
+			if (point.y > y) != (previous.y > y):
+				crossings.append((point.x + (y - point.y) * (previous.x - point.x) / (previous.y - point.y)) * scale_factor)
+			previous = point
+		crossings.sort()
+		for index in range(0, crossings.size() - 1, 2):
+			var start := maxi(0, int(ceil(crossings[index] - 0.5)))
+			var end := mini(image.get_width(), int(ceil(crossings[index + 1] - 0.5)))
+			while start < end:
+				var cell := Vector2i(start / pixels_per_tile, row / pixels_per_tile)
+				var next := mini(end, (cell.x + 1) * pixels_per_tile)
+				if visibility.is_tile_visible(cell, floor_level):
+					image.fill_rect(Rect2i(start, row, next - start, 1), Color.WHITE)
+				start = next
+
+
+static func fog_color_for_seen(seen: bool) -> Color:
+	# Exploration memory remains readable when it leaves the current FOV. Only
+	# never-observed space is fully black; current visibility is cut out above.
+	return Color(0.055, 0.08, 0.12, 0.22) if seen else Color(0.0, 0.0, 0.0, 1.0)
 
 
 func _update_actors() -> void:
@@ -608,21 +965,22 @@ func _update_actors() -> void:
 		alive_ids[actor_id] = true
 		var logical_position: Vector2 = node.get("logical_position")
 		var actor_floor := int(node.get("floor_level"))
-		var visible := node == player or visibility.can_see_position(logical_position, actor_floor)
 		var stair_id := String(node.get("stair_id"))
-		if node != player and (not stair_id.is_empty() or not player.stair_id.is_empty()):
-			visible = (not stair_id.is_empty() and stair_id == player.stair_id
-				and visibility.can_see_position(logical_position, player.floor_level))
+		var visible := _actor_is_visible(node, actor_id, logical_position, actor_floor, stair_id)
 		var visual: Dictionary = actor_visuals.get(actor_id, {})
+		if not visible:
+			if not visual.is_empty():
+				(visual["root"] as Node3D).visible = false
+				if bool(visual["has_health"]):
+					(visual["health_bar"] as Node3D).visible = false
+			continue
 		if visual.is_empty():
 			visual = _create_actor_visual(node)
 			actor_visuals[actor_id] = visual
 		var model: Node3D = visual["root"]
-		model.visible = visible
+		model.visible = true
 		if bool(visual["has_health"]):
-			(visual["health_bar"] as Node3D).visible = visible
-		if not visible:
-			continue
+			(visual["health_bar"] as Node3D).visible = true
 		model.position = Vector3(logical_position.x, world_map.elevation_at(logical_position, actor_floor, stair_id), logical_position.y)
 		if node == player:
 			model.rotation.y = atan2(-player.facing_direction.x, -player.facing_direction.y)
@@ -646,6 +1004,39 @@ func _update_actors() -> void:
 	for actor_id in actor_visuals.keys():
 		if not alive_ids.has(actor_id):
 			_remove_actor_visual(actor_id, actor_visuals[actor_id])
+	for actor_id in _actor_visibility_cache.keys():
+		if not alive_ids.has(actor_id):
+			_actor_visibility_cache.erase(actor_id)
+
+
+func _actor_is_visible(node: Node2D, actor_id: int, logical_position: Vector2,
+		actor_floor: int, stair_id: String) -> bool:
+	if node == player:
+		return true
+	# LOS is much more expensive than updating a visible model transform. Reuse
+	# the result until either end of the query changes. Moving actors still get a
+	# fresh answer immediately, while dormant off-screen populations become cheap.
+	var cached: Dictionary = _actor_visibility_cache.get(actor_id, {})
+	if (not cached.is_empty()
+		and int(cached["revision"]) == visibility.revision
+		and cached["position"] == logical_position
+		and int(cached["floor"]) == actor_floor
+		and String(cached["stair"]) == stair_id
+		and String(cached["player_stair"]) == player.stair_id):
+		return bool(cached["visible"])
+	var result := visibility.can_see_position(logical_position, actor_floor)
+	if not stair_id.is_empty() or not player.stair_id.is_empty():
+		result = (not stair_id.is_empty() and stair_id == player.stair_id
+			and visibility.can_see_position(logical_position, player.floor_level))
+	_actor_visibility_cache[actor_id] = {
+		"revision": visibility.revision,
+		"position": logical_position,
+		"floor": actor_floor,
+		"stair": stair_id,
+		"player_stair": player.stair_id,
+		"visible": result,
+	}
+	return result
 
 
 func _create_actor_visual(actor: Node2D) -> Dictionary:
@@ -748,6 +1139,7 @@ func _remove_actor_visual(actor_id: int, visual: Dictionary) -> void:
 			node.visible = false
 			node.queue_free()
 	actor_visuals.erase(actor_id)
+	_actor_visibility_cache.erase(actor_id)
 
 
 func _create_health_bar() -> Node3D:

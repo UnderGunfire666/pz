@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="MapBuildingTemplate" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/map_building_template.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/map_room_definition.gd" id="2"]
+
+[sub_resource type="Resource" id="Room_ground"]
+script = ExtResource("2")
+id = "ground"
+display_name = "Neighbour House / Ground"
+room_type = "residential"
+bounds = Rect2i(0, 0, 4, 3)
+
+[sub_resource type="Resource" id="Room_upper"]
+script = ExtResource("2")
+id = "upper"
+display_name = "Neighbour House / Upper"
+room_type = "bedroom"
+floor_level = 1
+bounds = Rect2i(0, 0, 4, 3)
+
+[resource]
+script = ExtResource("1")
+id = "neighbour_house_template"
+display_name = "Neighbour House"
+footprint = Vector2i(4, 3)
+floor_count = 2
+door_local_cell = Vector2i(1, 2)
+zone_type = "residential"
+rooms = Array[ExtResource("2")]([SubResource("Room_ground"), SubResource("Room_upper")])

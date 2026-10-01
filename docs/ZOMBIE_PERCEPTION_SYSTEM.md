@@ -2,6 +2,12 @@
 
 ## Runtime model
 
+Player proximity controls `simulation_active`. Dormant zombies retain their
+existing memory but disconnect from NoiseBus and reject direct hearing calls;
+sounds do not wake them. Reactivation reconnects hearing once, and the normal
+world-time memory checks expire stale stimuli. Same-floor hearing first rejects
+out-of-range sounds before evaluating wall attenuation.
+
 The Orangeville MVP creates its finite zombie population once when the world is initialized. The authored cap remains seven. Death removes an actor permanently; neither elapsed time, noise nor area pressure can spawn a replacement. Migration assigns an existing idle zombie a reachable destination and lets the shared `LocalNavigation` move it there normally.
 
 Visual, auditory and group observations are separate runtime states:

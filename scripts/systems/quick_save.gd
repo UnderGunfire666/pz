@@ -3,8 +3,9 @@ extends RefCounted
 
 ## A single versioned local slot. Only primitive Variant data is decoded.
 ## Pack steps resume from saved progress; other actions stop with search progress retained.
-const VERSION := 7
-const PATH := "user://afterlight_mvp_v7.save"
+const VERSION := 8
+const PATH := "user://afterlight_mvp_v8.save"
+const LEGACY_PATH_V7 := "user://afterlight_mvp_v7.save"
 const LEGACY_PATH := "user://afterlight_mvp_v6.save"
 const LEGACY_PATH_V5 := "user://afterlight_mvp_v5.save"
 const LEGACY_PATH_V4 := "user://afterlight_mvp_v4.save"
@@ -40,7 +41,8 @@ static func save_game(game: MVPGameRoot, path: String = PATH) -> bool:
 
 static func load_game(game: MVPGameRoot, path: String = PATH) -> bool:
 	if path == PATH and not FileAccess.file_exists(path):
-		if FileAccess.file_exists(LEGACY_PATH): path = LEGACY_PATH
+		if FileAccess.file_exists(LEGACY_PATH_V7): path = LEGACY_PATH_V7
+		elif FileAccess.file_exists(LEGACY_PATH): path = LEGACY_PATH
 		elif FileAccess.file_exists(LEGACY_PATH_V5): path = LEGACY_PATH_V5
 		elif FileAccess.file_exists(LEGACY_PATH_V4): path = LEGACY_PATH_V4
 		elif FileAccess.file_exists(LEGACY_PATH_V3): path = LEGACY_PATH_V3
@@ -90,7 +92,7 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 	npc_data["survival"] = _survival_data(game.npc.survival)
 	npc_data["brain"] = game.npc.brain.to_save_data()
 	npc_data["known_containers"] = game.npc.known_container_ids.duplicate()
-	return {"version": VERSION, "clock": GameTime.elapsed_game_seconds,
+	return {"version": VERSION, "map_identity": map_identity(game.world_map.definition), "clock": GameTime.elapsed_game_seconds,
 		"player": _actor_data(game.player), "facing": game.player.facing_direction,
 		"health": game.player_state.health, "survival": _survival_data(game.player_state.survival),
 		"wounds": game.player_state.wounds.duplicate(true),
@@ -112,6 +114,9 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if data.get("version") == 4: data = _migrate_v4(data)
 	if data.get("version") == 5: data = _migrate_v5(data)
 	if data.get("version") == 6: data = _migrate_v6(data)
+	if data.get("version") == 7: data = _migrate_v7(data)
+	if data.get("map_identity") != map_identity(game.world_map.definition):
+		return false
 	# Validate the entire snapshot before replacing live state.
 	var required := ["version", "clock", "player", "facing", "health", "survival", "wounds",
 		"character", "player_status", "inventory", "points", "zombies", "npc",
@@ -146,6 +151,10 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 			return false
 	for key in data["seen"]:
 		if not key is Vector3i or not data["seen"][key] is bool:
+			return false
+		if key.x < 0 or key.y < 0 or key.x >= game.world_map.width or key.y >= game.world_map.height:
+			return false
+		if game.world_map.get_tile_at(Vector2i(key.x, key.y), key.z) == null:
 			return false
 	if not data["encountered"] is bool or not data["rest_floor"] is int:
 		return false
@@ -231,6 +240,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	if data.get("version") == 4: data = _migrate_v4(data)
 	if data.get("version") == 5: data = _migrate_v5(data)
 	if data.get("version") == 6: data = _migrate_v6(data)
+	if data.get("version") == 7: data = _migrate_v7(data)
 	if not validate(data, game): return
 	game.interactions.interrupt_action("Loading")
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
@@ -296,8 +306,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.npc.brain.load_save_data(data["npc"]["brain"])
 	game.npc.known_container_ids.assign(data["npc"]["known_containers"])
 	game.npc.cancel_current_task()
-	game.visibility.seen_tiles = data["seen"].duplicate()
-	game.visibility.invalidate()
+	game.visibility.restore_exploration(data["seen"])
 	game.visibility.refresh(game.player.logical_position, game.player.facing_direction, false, game.player.floor_level,
 		game.player_state.perception_multiplier())
 	game.milestones = data["milestones"].duplicate()
@@ -412,7 +421,11 @@ static func _migrate_v4(source: Dictionary) -> Dictionary:
 		data["npc"]["survival"]["fatigue"] = 100.0 - float(data["npc"]["survival"].get("fatigue", 0.0))
 	var state := PlayerState.new()
 	state.wounds.assign(data.get("wounds", []))
-	for wound in state.wounds: state._normalize_wound(wound)
+	for wound in state.wounds:
+		# Only the old schema stores fractional wound severity.
+		var severity := float(wound.get("severity", 0.0))
+		if severity <= 1.0: wound["severity"] = severity * 100.0
+		state._normalize_wound(wound)
 	state.zombie_virus_exposure = data.get("virus_exposure", false)
 	if state.zombie_virus_exposure:
 		var old_progress := clampf(float(data.get("virus_progress", 0.0)), 0.0, 1.0)
@@ -435,7 +448,7 @@ static func _migrate_v5(source: Dictionary) -> Dictionary:
 
 static func _migrate_v6(source: Dictionary) -> Dictionary:
 	var data := source.duplicate(true)
-	data["version"] = VERSION
+	data["version"] = 7
 	var now := float(data.get("clock", 0.0))
 	for zombie in data.get("zombies", []):
 		if not zombie is Dictionary: continue
@@ -447,6 +460,43 @@ static func _migrate_v6(source: Dictionary) -> Dictionary:
 	data["population"] = {"initialized": true, "initial_count": data.get("zombies", []).size(),
 		"migration_elapsed": maxf(0.0, float(data.get("respawn", 0.0)))}
 	data.erase("respawn")
+	return data
+
+
+static func map_identity(definition: Resource) -> Dictionary:
+	return {"id": definition.get("id"), "format_version": definition.get("format_version"),
+		"content_hash": var_to_bytes(_static_content(definition)).hex_encode().sha256_text()}
+
+
+static func _static_content(value: Variant) -> Variant:
+	# Hash exported values recursively, including external template/terrain
+	# resources. Paths alone miss edited dependencies; instance IDs are unstable.
+	if value is Resource:
+		var properties: Dictionary = {}
+		for property in value.get_property_list():
+			if int(property["usage"]) & PROPERTY_USAGE_STORAGE and int(property["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE:
+				properties[String(property["name"])] = _static_content(value.get(property["name"]))
+		return [value.get_script().resource_path, _static_content(properties)]
+	if value is Dictionary:
+		var keys: Array = value.keys()
+		keys.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		var pairs: Array = []
+		for key in keys: pairs.append([key, _static_content(value[key])])
+		return pairs
+	if value is Array:
+		var items: Array = []
+		for item in value: items.append(_static_content(item))
+		return items
+	return value
+
+
+static func _migrate_v7(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = VERSION
+	# Historical saves have no map identity. They belonged to the bundled map;
+	# never assign them the identity of an arbitrary currently selected map.
+	if not data.has("map_identity"):
+		data["map_identity"] = map_identity(WorldMap.DEFAULT_MAP)
 	return data
 
 

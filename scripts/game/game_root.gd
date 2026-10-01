@@ -30,15 +30,30 @@ var encounter_origin := Vector2.ZERO
 var encountered_zombie := false
 var rest_origin := Vector2.ZERO
 var rest_floor := 0
+var startup_timings_ms: Dictionary = {}
+var _startup_started_usec := 0
+var _startup_stage_usec := 0
+var _startup_report_pending := true
+
+
+func _startup_mark(stage: String) -> void:
+	var now := Time.get_ticks_usec()
+	startup_timings_ms[stage] = float(now - _startup_stage_usec) / 1000.0
+	_startup_stage_usec = now
+	print("[Startup] %s: %.2f ms" % [stage, startup_timings_ms[stage]])
 
 
 func _ready() -> void:
+	_startup_started_usec = Time.get_ticks_usec()
+	_startup_stage_usec = _startup_started_usec
+	print("[Startup] Engine start to game _ready: %.2f ms" % (float(_startup_started_usec) / 1000.0))
 	GameTime.elapsed_game_seconds = 8.0 * 3600.0
 	GameTime.last_advanced_game_seconds = 0.0
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	world_map = WorldMap.new()
 	world_map.name = "WorldMap"
 	add_child(world_map)
+	_startup_mark("Map + navigation")
 
 	actor_layer = Node2D.new()
 	actor_layer.name = "Actors"
@@ -55,8 +70,9 @@ func _ready() -> void:
 	player_state.setup_inventory(inventory)
 	player.name = "Player"
 	actor_layer.add_child(player)
-	player.setup(world_map, player_state, Vector2(4.45, 6.65))
+	player.setup(world_map, player_state, world_map.definition.player_spawn)
 	player.attack_requested.connect(_on_player_attack)
+	_startup_mark("Player + character data")
 
 	interactions = InteractionSystem.new()
 	interactions.name = "InteractionSystem"
@@ -69,6 +85,7 @@ func _ready() -> void:
 	interactions.food_found.connect(func() -> void: milestones["food"] = true)
 	interactions.light_injury_received.connect(func() -> void: milestones["injury"] = true)
 	interactions.rest_completed.connect(_on_rest_completed)
+	_startup_mark("Interactions + loot")
 
 	zombie_spawner = ZombieSpawner.new()
 	zombie_spawner.name = "ZombieSpawner"
@@ -81,14 +98,16 @@ func _ready() -> void:
 	npc = SurvivorNPC.new()
 	npc.name = "SurvivorNPC"
 	actor_layer.add_child(npc)
-	npc.setup(world_map, Vector2(4.4, 10.3))
+	npc.setup(world_map, world_map.definition.npc_spawn, player)
 	npc.setup_interactions(interactions)
+	_startup_mark("Zombies + NPC")
 
 	world_3d_view = World3DView.new()
 	world_3d_view.name = "World3DScene"
 	add_child(world_3d_view)
 	world_3d_view.setup(world_map, player, actor_layer, visibility, interactions)
 	camera = world_3d_view.camera
+	_startup_mark("3D world + visibility")
 
 	hud = MVPHud.new()
 	hud.name = "HUD"
@@ -98,15 +117,17 @@ func _ready() -> void:
 	GameTime.speed_changed.connect(_on_speed_changed)
 	player_state.died.connect(_on_player_died)
 	show_notification("Prototype ready. First objective: enter the safehouse.")
+	_startup_mark("HUD + final setup")
 
 
 func _process(delta: float) -> void:
 	var game_seconds := GameTime.last_advanced_game_seconds
 	if game_seconds > 0.0 and not player_state.is_dead():
-		if interactions.is_resting() and local_zombie_count(4.0) > 0:
+		var nearby_counts := local_zombie_counts()
+		if interactions.is_resting() and int(nearby_counts["danger"]) > 0:
 			interactions.interrupt_action("Danger woke you")
 		player_state.advance(game_seconds, player.exertion(), interactions.is_resting(),
-			local_zombie_count(6.0), player.exertion() > 0.0)
+			int(nearby_counts["nearby"]), player.exertion() > 0.0)
 
 	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
 		player_state.perception_multiplier())
@@ -117,6 +138,13 @@ func _process(delta: float) -> void:
 	if player_state.is_dead() and GameTime.simulation_scale() > 0.0:
 		GameTime.set_speed(GameTime.SpeedMode.PAUSED)
 	hud.refresh(self)
+	if _startup_report_pending:
+		_startup_report_pending = false
+		_startup_mark("First gameplay update")
+		startup_timings_ms["Game initialization total"] = float(Time.get_ticks_usec() - _startup_started_usec) / 1000.0
+		startup_timings_ms["Engine start to first update"] = float(Time.get_ticks_usec()) / 1000.0
+		print("[Startup] Game initialization total: %.2f ms; engine start to first update: %.2f ms" % [
+			startup_timings_ms["Game initialization total"], startup_timings_ms["Engine start to first update"]])
 
 
 func _input(event: InputEvent) -> void:
@@ -323,3 +351,17 @@ func local_zombie_count(radius: float = 4.0) -> int:
 		if is_instance_valid(zombie) and zombie.floor_level == player.floor_level and visibility.can_see_position(zombie.logical_position, zombie.floor_level) and player.logical_position.distance_to(zombie.logical_position) <= radius:
 			count += 1
 	return count
+
+
+func local_zombie_counts() -> Dictionary:
+	var result := {"danger": 0, "nearby": 0}
+	for zombie: ZombieActor in zombie_spawner.active_zombies:
+		if not is_instance_valid(zombie) or zombie.floor_level != player.floor_level:
+			continue
+		var distance := player.logical_position.distance_to(zombie.logical_position)
+		if distance > 6.0 or not visibility.can_see_position(zombie.logical_position, zombie.floor_level):
+			continue
+		result["nearby"] = int(result["nearby"]) + 1
+		if distance <= 4.0:
+			result["danger"] = int(result["danger"]) + 1
+	return result

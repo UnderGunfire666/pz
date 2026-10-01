@@ -11,6 +11,7 @@ var trait_label: Label
 var selected_wound_id := ""
 var _game: MVPGameRoot
 var _last_signature := ""
+var _last_character_signature := ""
 
 func _ready() -> void:
 	var style := StyleBoxFlat.new()
@@ -109,7 +110,10 @@ func refresh(game: MVPGameRoot) -> void:
 			injury.set_text(3, infection_status(wound))
 			injury.set_metadata(0, wound["id"])
 		row.collapsed = false
-	_refresh_character_page(state)
+	var character_signature := str(character_data)
+	if character_signature != _last_character_signature:
+		_last_character_signature = character_signature
+		_refresh_character_page(state)
 
 func _refresh_character_page(state: PlayerState) -> void:
 	skill_tree.clear()

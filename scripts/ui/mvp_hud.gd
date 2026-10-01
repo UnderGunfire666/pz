@@ -18,6 +18,10 @@ var pause_button: Button
 var normal_button: Button
 var fast_button: Button
 var _last_inventory := ""
+var _last_presentation_signature := ""
+var _cached_weight := 0.0
+var _cached_weight_revision := -1
+var _presentation_refresh_count := 0
 var action_row: HBoxContainer
 var action_bar: ProgressBar
 var action_label: Label
@@ -76,6 +80,7 @@ func _ready() -> void:
 	character_panel.visible = false
 	root.add_child(character_panel)
 	character_creation_panel = CharacterCreationPanel.new()
+	character_creation_panel.hide()
 	character_creation_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	character_creation_panel.position = Vector2(-450, -285)
 	character_creation_panel.custom_minimum_size = Vector2(900, 570)
@@ -145,7 +150,6 @@ func _button(parent: Node, text: String, callback: Callable, toggle: bool = fals
 
 func setup(p_view: World3DView) -> void:
 	world_view = p_view
-	call_deferred("_setup_character_creation")
 
 func _setup_character_creation() -> void:
 	if _game != null: character_creation_panel.setup(_game)
@@ -153,13 +157,26 @@ func _setup_character_creation() -> void:
 
 func refresh(game: MVPGameRoot) -> void:
 	_game = game
-	if character_creation_panel._game == null: character_creation_panel.setup(game)
 	if not game.interactions.container_view_requested.is_connected(_view_container):
 		game.interactions.container_view_requested.connect(_view_container)
 	action_row.visible = not game.interactions.active_action.is_empty()
 	if action_row.visible:
 		action_label.text = game.interactions.active_action["label"]
 		action_bar.value = game.interactions.action_progress() * 100.0
+	var weight := _display_weight(game.inventory)
+	var player_cell := Vector2i(game.player.logical_position * 4.0)
+	var needs := game.player_state.survival
+	var signature := str([
+		int(GameTime.elapsed_game_seconds / 60.0), player_cell, game.player.floor_level, game.player.stair_id,
+		int(round(game.player_state.health)), int(needs.hunger), int(needs.thirst), int(needs.fatigue), int(needs.stamina),
+		int(round(game.player_state.pain)), int(round(game.player_state.panic)), int(round(game.player_state.stress)),
+		int(round(game.player_state.boredom)), int(round(game.player_state.unhappiness)),
+		int(round(game.player_state.core_temperature * 100.0)), game.inventory.revision,
+		game.milestones, game.notification, GameTime.speed_mode, game.player_state.is_dead()])
+	if signature == _last_presentation_signature:
+		return
+	_last_presentation_signature = signature
+	_presentation_refresh_count += 1
 	var tile := game.world_map.get_tile(game.player.logical_position, game.player.floor_level)
 	var place := "Outdoors"
 	if tile != null and not tile.building_id.is_empty():
@@ -170,12 +187,11 @@ func refresh(game: MVPGameRoot) -> void:
 		stair_text = " · Stairs %d↔%d" % [link.from_floor + 1, link.to_floor + 1]
 	var display_floor := game.world_map.display_floor_at(game.player.logical_position, game.player.floor_level, game.player.stair_id)
 	floor_label.text = "%s · %s · Floor %d%s" % [GameTime.formatted_time(), place, display_floor + 1, stair_text]
-	var needs := game.player_state.survival
 	status_label.text = "Health %d · Hunger %d · Thirst %d · Fatigue %d · Stamina %d   |   %.1f / %.1f kg" % [
 		game.player_state.health, needs.hunger, needs.thirst, needs.fatigue, needs.stamina,
-		game.inventory.current_weight(), game.inventory.absolute_limit]
+		weight, game.inventory.absolute_limit]
 	status_label.text += " · penalty %.1f kg  %s" % [game.inventory.penalty_limit, _status_icons(game.player_state)]
-	status_label.modulate = Color(1, 0.35, 0.3) if game.inventory.current_weight() >= game.inventory.absolute_limit * 0.9 else (Color(1, 0.75, 0.3) if game.inventory.current_weight() > game.inventory.penalty_limit else Color.WHITE)
+	status_label.modulate = Color(1, 0.35, 0.3) if weight >= game.inventory.absolute_limit * 0.9 else (Color(1, 0.75, 0.3) if weight > game.inventory.penalty_limit else Color.WHITE)
 	detail_label.text = "Wound: %s\n%s\nF eat · V drink · R sort" % [
 		game.player_state.visible_wound_summary(), game.inventory.summary()]
 	if details.visible:
@@ -192,6 +208,13 @@ func refresh(game: MVPGameRoot) -> void:
 	fast_button.set_pressed_no_signal(GameTime.speed_mode == GameTime.SpeedMode.FAST)
 	for button in [pause_button, normal_button, fast_button]:
 		button.disabled = game.player_state.is_dead()
+
+
+func _display_weight(inventory: InventoryGrid) -> float:
+	if _cached_weight_revision != inventory.revision:
+		_cached_weight = inventory.current_weight()
+		_cached_weight_revision = inventory.revision
+	return _cached_weight
 
 
 func adjust_zoom(factor: float) -> void:

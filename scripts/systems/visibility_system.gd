@@ -6,6 +6,8 @@ extends Node
 var world_map: WorldMap
 var visible_tiles: Dictionary = {}
 var seen_tiles: Dictionary = {}
+signal tile_explored(key: Vector3i)
+signal exploration_restored
 var viewer_position := Vector2.ZERO
 var facing_direction := Vector2.DOWN
 var aim_mode := false
@@ -15,7 +17,10 @@ var vision_radius := 0.0
 var half_fov_radians := 0.0
 var perception_multiplier := 1.0
 const SELF_VISION_RADIUS := 1.2
-const FOV_RAY_COUNT := 256
+# 128 rays produce a 2.8-degree contour, which remains smooth once rasterized
+# into the filtered FOV mask while halving the wall-intersection work done on
+# each meaningful player/FOV update.
+const FOV_RAY_COUNT := 128
 var revision := 0
 var _last_world_revision := -1
 var _last_light := -1.0
@@ -53,26 +58,31 @@ func refresh(next_viewer_position: Vector2, next_facing_direction: Vector2, next
 	var viewer_cell := Vector2i(int(floor(viewer_position.x)), int(floor(viewer_position.y)))
 	var viewer_key := Vector3i(viewer_cell.x, viewer_cell.y, viewer_floor)
 	visible_tiles[viewer_key] = true
-	seen_tiles[viewer_key] = true
+	_mark_seen(viewer_key)
 
 	vision_radius = 6.6 * lerpf(0.55, 1.0, world_map.ambient_light()) * perception_multiplier
 	half_fov_radians = deg_to_rad(68.0)
-	for y in range(WorldMap.HEIGHT):
-		for x in range(WorldMap.WIDTH):
+	# FOV is bounded by vision_radius.  Do not re-test an entire city whenever
+	# the player takes a step; only cells which can possibly fall inside the
+	# sight circle need a LOS query.
+	var min_x := maxi(0, int(floor(viewer_position.x - vision_radius)))
+	var max_x := mini(world_map.width - 1, int(floor(viewer_position.x + vision_radius)))
+	var min_y := maxi(0, int(floor(viewer_position.y - vision_radius)))
+	var max_y := mini(world_map.height - 1, int(floor(viewer_position.y + vision_radius)))
+	for y in range(min_y, max_y + 1):
+		for x in range(min_x, max_x + 1):
 			var cell := Vector2i(x, y)
 			var target := Vector2(cell) + Vector2(0.5, 0.5)
 			if can_see_position(target, viewer_floor):
 				var key := Vector3i(x, y, viewer_floor)
 				visible_tiles[key] = true
-				seen_tiles[key] = true
+				_mark_seen(key)
 	visible_world_polygon = _build_visibility_polygon()
 	revision += 1
 
 
 func can_see_position(world_position: Vector2, floor_level: int = 0) -> bool:
 	if world_map == null or floor_level != viewer_floor:
-		return false
-	if not room_contents_allowed(world_position, floor_level):
 		return false
 	var offset := world_position - viewer_position
 	if offset.length() > vision_radius:
@@ -81,7 +91,20 @@ func can_see_position(world_position: Vector2, floor_level: int = 0) -> bool:
 		var delta_angle := absf(wrapf(offset.angle() - facing_direction.angle(), -PI, PI))
 		if delta_angle > half_fov_radians:
 			return false
-	return world_map.has_line_of_sight(viewer_position, world_position, viewer_floor)
+	return room_contents_allowed(world_position, floor_level)
+
+
+func _mark_seen(key: Vector3i) -> void:
+	if seen_tiles.has(key):
+		return
+	seen_tiles[key] = true
+	tile_explored.emit(key)
+
+
+func restore_exploration(tiles: Dictionary) -> void:
+	seen_tiles = tiles.duplicate()
+	invalidate()
+	exploration_restored.emit()
 
 
 func _room_at(position: Vector2, floor_level: int) -> String:
@@ -90,8 +113,11 @@ func _room_at(position: Vector2, floor_level: int) -> String:
 
 
 func room_contents_allowed(position: Vector2, floor_level: int) -> bool:
-	var room := _room_at(position, floor_level)
-	return room.is_empty() or room == _room_at(viewer_position, viewer_floor)
+	# Rooms are not opaque privacy volumes. Doorways and future open windows reveal
+	# whatever the ordinary floor-aware LOS can actually reach; solid wall faces
+	# still block the query regardless of rendering cutaways.
+	return (world_map != null and floor_level == viewer_floor
+		and world_map.has_line_of_sight(viewer_position, position, viewer_floor, floor_level))
 
 
 func invalidate() -> void:
@@ -100,19 +126,21 @@ func invalidate() -> void:
 
 func _build_visibility_polygon() -> PackedVector2Array:
 	var polygon := PackedVector2Array()
+	var radius := maxf(vision_radius, SELF_VISION_RADIUS)
+	var walls := world_map.query_walls(viewer_floor, Rect2(viewer_position, Vector2.ZERO).grow(radius))
 	for ray_index in range(FOV_RAY_COUNT):
 		var angle := TAU * float(ray_index) / float(FOV_RAY_COUNT)
 		var direction := Vector2.from_angle(angle)
 		var angle_from_facing := absf(wrapf(angle - facing_direction.angle(), -PI, PI))
 		var ray_radius := vision_radius if angle_from_facing <= half_fov_radians else SELF_VISION_RADIUS
-		polygon.append(_ray_endpoint(direction, ray_radius))
+		polygon.append(_ray_endpoint(direction, ray_radius, walls))
 	return polygon
 
 
-func _ray_endpoint(direction: Vector2, max_distance: float) -> Vector2:
+func _ray_endpoint(direction: Vector2, max_distance: float, candidates: Array) -> Vector2:
 	var ray_end := viewer_position + direction * max_distance
 	var nearest_distance := max_distance
-	for wall_face in world_map.wall_faces(viewer_floor):
+	for wall_face in candidates:
 		var intersection: Variant = Geometry2D.segment_intersects_segment(
 			viewer_position,
 			ray_end,

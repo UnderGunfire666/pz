@@ -4,9 +4,9 @@ extends Node3D
 var floor_index := 0
 var walls: Array[OccludableWall] = []
 var parts: Array[Dictionary] = []
-const CONCEALED_ROOM = preload("res://resources/materials/concealed_room.tres")
 var viewer_room := ""
 var active_stair := ""
+var visible_regions: Array[AABB] = []
 
 
 func register_part(node: Node3D, kind: String, room_id: String = "", stair_id: String = "") -> void:
@@ -20,13 +20,25 @@ func register_part(node: Node3D, kind: String, room_id: String = "", stair_id: S
 	apply_room_mask()
 
 
+func unregister_part(node: Node3D) -> bool:
+	for wall_index in range(walls.size() - 1, -1, -1):
+		if walls[wall_index].mesh == node:
+			walls.remove_at(wall_index)
+			return true
+	for part_index in range(parts.size() - 1, -1, -1):
+		if parts[part_index]["node"] == node:
+			parts.remove_at(part_index)
+			return true
+	return false
+
+
 func apply_visibility(cutaway: bool, active_floor: int,
-		player_position: Vector2, camera_direction: Vector2) -> void:
+		feet: Vector3, view_direction: Vector3, view_distance: float) -> void:
 	visible = not cutaway or floor_index <= active_floor
 	for part in parts:
 		(part["node"] as Node3D).visible = part["visible"]
 	for wall in walls:
-		wall.apply_cutaway(cutaway and visible, player_position, camera_direction)
+		wall.apply_cutaway(cutaway and visible, feet, view_direction, view_distance)
 	apply_room_mask()
 
 
@@ -45,9 +57,21 @@ func apply_exterior(active_floor: int, feet: Vector3, direction: Vector3, distan
 
 func apply_room_mask() -> void:
 	for part in parts:
-		var revealed: bool = String(part["room"]).is_empty() or String(part["room"]) == viewer_room
+		var revealed: bool = (String(part["room"]).is_empty()
+			or String(part["room"]) == viewer_room
+			or _intersects_visible_region(part["bounds"]))
 		var node := part["node"] as Node3D
 		if part["kind"] == "floor":
-			(node as MeshInstance3D).material_override = part["material"] if revealed else CONCEALED_ROOM
+			# Persistent explored-space memory is drawn by the fog overlay. A separate
+			# opaque room material here would turn explored indoor floor back to black.
+			(node as MeshInstance3D).material_override = part["material"]
 		elif not revealed and (active_stair.is_empty() or part["stair"] != active_stair):
 			node.visible = false
+
+
+func _intersects_visible_region(bounds: AABB) -> bool:
+	for region in visible_regions:
+		# Plane meshes have zero height; a tiny expansion makes their authored tile
+		# bounds participate without leaking into another logical floor.
+		if bounds.grow(0.04).intersects(region): return true
+	return false

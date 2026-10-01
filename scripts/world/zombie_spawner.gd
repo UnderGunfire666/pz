@@ -6,6 +6,8 @@ extends Node
 signal player_attacked(world_position: Vector2)
 
 const POPULATION_LIMIT := 7 # Compatibility alias; authored default lives in world_rules.tres.
+const MIN_ACTIVE_SIMULATION_RADIUS := 12.0
+const ACTIVE_SIMULATION_RADIUS_MULTIPLIER := 2.0
 
 var world_map: WorldMap
 var actor_layer: Node2D
@@ -17,6 +19,7 @@ var active_zombies: Array[ZombieActor] = []
 var population_initialized := false
 var initial_population_count := 0
 var migration_game_seconds := 0.0
+var _simulation_refresh_left := 0.0
 
 
 func setup(p_world_map: WorldMap, p_actor_layer: Node2D, p_player: PlayerController,
@@ -55,8 +58,12 @@ func seed_demo_population() -> void:
 	initial_population_count = _living_count()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if world_map == null or GameTime.simulation_scale() <= 0.0 or player_state.is_dead(): return
+	_simulation_refresh_left -= delta
+	if _simulation_refresh_left <= 0.0:
+		_refresh_simulation_range()
+		_simulation_refresh_left = 0.2
 	var game_seconds := GameTime.last_advanced_game_seconds
 	if game_seconds <= 0.0: return
 	migration_game_seconds += game_seconds
@@ -131,11 +138,30 @@ func population_by_area() -> Dictionary:
 	return result
 
 
+func _refresh_simulation_range() -> void:
+	var vision_radius := visibility_system.vision_radius if visibility_system != null else 0.0
+	var active_radius := maxf(MIN_ACTIVE_SIMULATION_RADIUS, vision_radius * ACTIVE_SIMULATION_RADIUS_MULTIPLIER)
+	for zombie: ZombieActor in active_zombies:
+		if not is_instance_valid(zombie) or zombie.health <= 0:
+			continue
+		# Include every storey inside the physical simulation sphere, allowing
+		# nearby multi-storey pursuit instead of freezing the third floor.
+		var floor_distance: float = world_map.elevation_at(zombie.logical_position, zombie.floor_level, zombie.stair_id) - world_map.elevation_at(player.logical_position, player.floor_level, player.stair_id)
+		var limit := active_radius + (2.0 if zombie.is_processing() else 0.0)
+		var nearby := zombie.logical_position.distance_squared_to(player.logical_position) + floor_distance * floor_distance <= limit * limit
+		zombie.set_simulation_active(nearby)
+		# Only distant idle actors use a coarse decision tick. Pursuit, combat and
+		# anything in the immediate playable bubble remain frame-rate responsive.
+		if nearby:
+			var horizontal_distance := zombie.logical_position.distance_to(player.logical_position)
+			zombie.set_logic_tick_interval(0.18 if not zombie.has_target and horizontal_distance > 10.0 else 0.0)
+
+
 func clear_population() -> void:
 	for zombie in active_zombies:
 		if not is_instance_valid(zombie): continue
 		zombie.remove_from_group("zombies")
-		zombie.set_process(false)
+		zombie.set_simulation_active(false)
 		zombie.queue_free()
 	active_zombies.clear()
 

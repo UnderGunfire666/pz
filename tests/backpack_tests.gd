@@ -58,6 +58,15 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	game.inventory.equipment.append(ItemStack.new(ItemDefinition.backpack("tiny", "Tiny", Vector3(1, 1, 2), 0.5, 0.1)))
 	var destination := game.inventory.default_destination()
 	var source := actions._ground_container()
+	var first_pile_count := actions.points.size()
+	check.call(actions._ground_container() == source and actions.points.size() == first_pile_count,
+		"repeated drops at one floor position reuse a single ground pile")
+	var ground_position := game.player.logical_position
+	game.player.floor_level = 1
+	game.player.logical_position = Vector2(4.5, 3.5)
+	check.call(actions._ground_container() != source, "same position on another floor receives an independent ground pile")
+	game.player.floor_level = 0
+	game.player.logical_position = ground_position
 	var cans := ItemStack.new(ItemDefinition.new("can", "Can", Vector3.ONE, 1, ["food"]), 3)
 	cans.units[0]["flavor"] = "Peach"
 	cans.units[1]["flavor"] = "Pear"

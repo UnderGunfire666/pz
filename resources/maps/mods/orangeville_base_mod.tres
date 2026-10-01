@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="MapModManifest" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/map_mod_manifest.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "orangeville_base"
+display_name = "Orangeville Base Content"
+version = "0.1.0"
+required_game_version = "0.1"
+map_paths = PackedStringArray("res://resources/maps/orangeville_prototype.tres")

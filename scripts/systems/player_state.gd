@@ -58,7 +58,8 @@ func add_wound(wound_type: String, location: String, severity: float, from_zombi
 	var normalized_type := wound_type.capitalize()
 	if normalized_type not in StatusConfig.WOUND_TYPES:
 		normalized_type = "Laceration" if "cut" in wound_type.to_lower() else "Scratch"
-	if severity <= 1.0: severity *= 100.0 # v4 compatibility
+	# Runtime damage is always measured in health points, including fractions.
+	if not is_finite(severity) or severity <= 0.0: return {}
 	severity = clampf(severity, 0.0, 100.0)
 	var wound := {"id": ItemStack.new_uid(), "type": normalized_type, "region": region,
 		"location": region, "severity": severity,
@@ -274,7 +275,6 @@ func _normalize_wound(wound: Dictionary) -> void:
 	if not wound.has("region"): wound["region"] = canonical_region(wound.get("location", "Torso"))
 	wound["location"] = wound["region"]
 	var value := float(wound.get("severity", 0.0))
-	if value <= 1.0: value *= 100.0
 	wound["severity"] = clampf(value, 0.0, 100.0)
 	var old_infection: Variant = wound.get("infection", wound.get("wound_infection", false))
 	wound["infection"] = 1.0 if old_infection is bool and old_infection else (0.0 if old_infection is bool else clampf(float(old_infection), 0.0, 100.0))

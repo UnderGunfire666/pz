@@ -1,0 +1,153 @@
+[gd_resource type="Resource" script_class="MapDefinition" load_steps=21 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/map_definition.gd" id="1_map"]
+[ext_resource type="Script" path="res://scripts/data/map_cell_definition.gd" id="2_cell"]
+[ext_resource type="Script" path="res://scripts/data/map_level_definition.gd" id="3_level"]
+[ext_resource type="Script" path="res://scripts/data/map_terrain_paint.gd" id="4_paint"]
+[ext_resource type="Script" path="res://scripts/data/map_building_instance_definition.gd" id="5_building"]
+[ext_resource type="Script" path="res://scripts/data/map_stair_definition.gd" id="6_stair"]
+[ext_resource type="Resource" path="res://resources/maps/templates/miller_house.tres" id="8_safehouse_template"]
+[ext_resource type="Resource" path="res://resources/maps/templates/corner_grocery.tres" id="9_store_template"]
+[ext_resource type="Resource" path="res://resources/maps/templates/neighbour_house.tres" id="10_neighbour_template"]
+[ext_resource type="Script" path="res://scripts/data/map_road_definition.gd" id="11_road"]
+[ext_resource type="Script" path="res://scripts/data/map_decoration_definition.gd" id="12_decoration"]
+[ext_resource type="Resource" path="res://resources/maps/terrain/grass.tres" id="7_grass"]
+[ext_resource type="Resource" path="res://resources/maps/terrain/asphalt.tres" id="8_asphalt"]
+
+[sub_resource type="Resource" id="TerrainPaint_grass"]
+script = ExtResource("4_paint")
+id = "orangeville_ground_grass"
+rect = Rect2i(0, 0, 64, 64)
+terrain = ExtResource("7_grass")
+
+[sub_resource type="Resource" id="MapLevel_ground"]
+script = ExtResource("3_level")
+level = 0
+terrain_paints = Array[ExtResource("4_paint")]([SubResource("TerrainPaint_grass")])
+
+[sub_resource type="Resource" id="MapCell_orangeville"]
+script = ExtResource("2_cell")
+id = "orangeville_cell_0_0"
+cell_coordinate = Vector2i(0, 0)
+size = Vector2i(64, 64)
+levels = Array[ExtResource("3_level")]([SubResource("MapLevel_ground")])
+
+[sub_resource type="Resource" id="Building_safehouse"]
+script = ExtResource("5_building")
+id = "safehouse"
+display_name = "Miller House"
+template = ExtResource("8_safehouse_template")
+origin = Vector2i(2, 2)
+bounds = Rect2i(2, 2, 5, 4)
+floor_count = 2
+door_cell = Vector2i(4, 5)
+zone_type = "residential"
+zombie_pressure = 0.14
+safehouse = true
+
+[sub_resource type="Resource" id="Building_corner_store"]
+script = ExtResource("5_building")
+id = "corner_store"
+display_name = "Corner Grocery"
+template = ExtResource("9_store_template")
+origin = Vector2i(10, 2)
+bounds = Rect2i(10, 2, 7, 7)
+floor_count = 3
+door_cell = Vector2i(13, 8)
+zone_type = "commercial"
+zombie_pressure = 0.38
+
+[sub_resource type="Resource" id="Building_neighbour_house"]
+script = ExtResource("5_building")
+id = "neighbour_house"
+display_name = "Neighbour House"
+template = ExtResource("10_neighbour_template")
+origin = Vector2i(2, 9)
+bounds = Rect2i(2, 9, 4, 3)
+floor_count = 2
+door_cell = Vector2i(3, 11)
+zone_type = "residential"
+zombie_pressure = 0.16
+
+[sub_resource type="Resource" id="Stair_safehouse"]
+script = ExtResource("6_stair")
+id = "safehouse_0_1"
+building_id = "safehouse"
+start = Vector2(3.25, 4.5)
+end = Vector2(5.75, 4.5)
+from_floor = 0
+to_floor = 1
+width = 0.72
+
+[sub_resource type="Resource" id="Stair_neighbour"]
+script = ExtResource("6_stair")
+id = "neighbour_0_1"
+building_id = "neighbour_house"
+start = Vector2(2.7, 9.7)
+end = Vector2(5.3, 9.7)
+from_floor = 0
+to_floor = 1
+width = 0.72
+
+[sub_resource type="Resource" id="Stair_grocery_lower"]
+script = ExtResource("6_stair")
+id = "grocery_0_1"
+building_id = "corner_store"
+start = Vector2(11.25, 7.25)
+end = Vector2(11.25, 3.75)
+from_floor = 0
+to_floor = 1
+width = 0.8
+
+[sub_resource type="Resource" id="Stair_grocery_upper"]
+script = ExtResource("6_stair")
+id = "grocery_1_2"
+building_id = "corner_store"
+start = Vector2(12.25, 3.75)
+end = Vector2(12.25, 7.25)
+from_floor = 1
+to_floor = 2
+width = 0.8
+
+[sub_resource type="Resource" id="Road_east_west"]
+script = ExtResource("11_road")
+id = "orangeville_east_west_road"
+level = 0
+centerline = PackedVector2Array(0, 7.5, 64, 7.5)
+width = 1.0
+terrain = ExtResource("8_asphalt")
+
+[sub_resource type="Resource" id="Road_north_south"]
+script = ExtResource("11_road")
+id = "orangeville_north_south_road"
+level = 0
+centerline = PackedVector2Array(8.5, 0, 8.5, 64)
+width = 1.0
+terrain = ExtResource("8_asphalt")
+
+[sub_resource type="Resource" id="Decoration_road_sign"]
+script = ExtResource("12_decoration")
+id = "road_sign_7_7"
+kind = "road_sign"
+position = Vector2(7.3, 7.0)
+
+[sub_resource type="Resource" id="Decoration_street_tree"]
+script = ExtResource("12_decoration")
+id = "street_tree_0_7"
+kind = "tree"
+position = Vector2(0.9, 7.5)
+
+[resource]
+script = ExtResource("1_map")
+id = "orangeville_prototype"
+display_name = "Orangeville Prototype"
+format_version = 1
+cell_size = Vector2i(64, 64)
+default_floor_spacing = 3.0
+cells = Array[ExtResource("2_cell")]([SubResource("MapCell_orangeville")])
+buildings = Array[ExtResource("5_building")]([SubResource("Building_safehouse"), SubResource("Building_corner_store"), SubResource("Building_neighbour_house")])
+roads = Array[ExtResource("11_road")]([SubResource("Road_east_west"), SubResource("Road_north_south")])
+decorations = Array[ExtResource("12_decoration")]([SubResource("Decoration_road_sign"), SubResource("Decoration_street_tree")])
+stairs = Array[ExtResource("6_stair")]([SubResource("Stair_safehouse"), SubResource("Stair_neighbour"), SubResource("Stair_grocery_lower"), SubResource("Stair_grocery_upper")])
+player_spawn = Vector2(4.45, 6.65)
+npc_spawn = Vector2(4.4, 10.3)
