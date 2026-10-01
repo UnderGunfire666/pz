@@ -5,6 +5,7 @@ extends RefCounted
 var level: int
 var tiles: Dictionary = {}
 var wall_faces: Array[Dictionary] = []
+var visual_edges: Array[Dictionary] = []
 var rooms: Array[RoomData] = []
 
 

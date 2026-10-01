@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapTerrainDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/map_terrain_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "soil"
+display_name = "Soil"
+category = "dirt"
+passable = true
+movement_cost = 1.05
+supports_floor = true
+visual_recipe = "soil"

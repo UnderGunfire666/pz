@@ -22,11 +22,18 @@ static func validate(map) -> Array[String]:
 			issues.append("Cell coordinate %s is authored more than once." % cell.cell_coordinate)
 		cell_positions[cell.cell_coordinate] = true
 		for level in cell.levels:
+			var heat_ids: Dictionary = {}
 			for paint in level.terrain_paints:
 				if paint.id.strip_edges().is_empty() or paint.terrain == null:
 					issues.append("Cell %s level %d has a terrain paint with a missing ID or terrain." % [cell.id, level.level])
 				if not Rect2i(Vector2i.ZERO, cell.size).encloses(paint.rect):
 					issues.append("Paint %s exceeds cell %s at level %d." % [paint.id, cell.id, level.level])
+			for heat in level.heat_paints:
+				if heat.id.strip_edges().is_empty() or heat_ids.has(heat.id):
+					issues.append("Cell %s level %d has a missing or duplicate heat paint ID." % [cell.id, level.level])
+				heat_ids[heat.id] = true
+				if heat.pressure < 0.0 or heat.pressure > 1.0 or not Rect2i(Vector2i.ZERO, cell.size).encloses(heat.rect):
+					issues.append("Heat paint %s exceeds cell bounds or has invalid pressure." % heat.id)
 	var building_ids: Dictionary = {}
 	var template_ids: Dictionary = {}
 	for building in map.buildings:
@@ -49,6 +56,24 @@ static func validate(map) -> Array[String]:
 				wall_ids[edge.id] = true
 				if edge.level < 0 or edge.level >= building.template.floor_count or edge.start.distance_to(edge.end) < 0.01:
 					issues.append("Template %s has an invalid wall edge %s." % [building.template.id, edge.id])
+			for surface in building.template.indoor_floors:
+				if surface.id.strip_edges().is_empty() or surface.terrain == null or surface.level < 0 or surface.level >= building.template.floor_count:
+					issues.append("Template %s has an invalid indoor floor %s." % [building.template.id, surface.id])
+				elif not Rect2i(Vector2i.ZERO, building.template.footprint).encloses(surface.rect):
+					issues.append("Template %s indoor floor %s exceeds its footprint." % [building.template.id, surface.id])
+			var local_stair_ids: Dictionary = {}
+			for stair in building.template.stairs:
+				var footprint := Rect2(Vector2.ZERO, Vector2(building.template.footprint))
+				if stair.id.is_empty() or local_stair_ids.has(stair.id):
+					issues.append("Template %s has missing or duplicate stair ID." % building.template.id)
+				local_stair_ids[stair.id] = true
+				if stair.from_floor < 0 or stair.to_floor != stair.from_floor + 1 or stair.to_floor >= building.template.floor_count or stair.width <= 0.0 or stair.start.distance_to(stair.end) < 0.1:
+					issues.append("Template %s stair %s has invalid levels or geometry." % [building.template.id, stair.id])
+				if not footprint.has_point(stair.start) or not footprint.has_point(stair.end):
+					issues.append("Template %s stair %s extends outside the house." % [building.template.id, stair.id])
+				for opening in stair.opening_cells:
+					if not Rect2i(Vector2i.ZERO, building.template.footprint).has_point(opening):
+						issues.append("Template %s stair opening exceeds its footprint." % building.template.id)
 		if building.effective_floor_count() <= 0 or bounds.size.x <= 0 or bounds.size.y <= 0:
 			issues.append("Building %s has invalid bounds or floor count." % building.id)
 	var stair_ids: Dictionary = {}
@@ -65,8 +90,19 @@ static func validate(map) -> Array[String]:
 		if road.id.strip_edges().is_empty() or road_ids.has(road.id):
 			issues.append("Road has a missing or duplicate stable ID: %s." % road.id)
 		road_ids[road.id] = true
-		if road.terrain == null or road.centerline.size() < 2 or road.width <= 0.0:
+		if road.terrain == null or (road.centerline.size() < 2 and road.grid_cells.is_empty()) or road.width <= 0.0:
 			issues.append("Road %s has missing terrain, width or centerline." % road.id)
+		elif not is_equal_approx(road.width, roundf(road.width)):
+			issues.append("Road %s width must be a whole number of cells." % road.id)
+	var indoor_ids: Dictionary = {}
+	for surface in map.indoor_floors:
+		if surface.id.strip_edges().is_empty() or indoor_ids.has(surface.id):
+			issues.append("Indoor floor has a missing or duplicate stable ID: %s." % surface.id)
+		indoor_ids[surface.id] = true
+		if surface.terrain == null or surface.level < 0 or surface.rect.size.x <= 0 or surface.rect.size.y <= 0:
+			issues.append("Indoor floor %s has invalid terrain, level or bounds." % surface.id)
+		elif surface.terrain.category == "water":
+			issues.append("Indoor floor %s cannot use water terrain." % surface.id)
 	var zone_ids: Dictionary = {}
 	for zone in map.zones:
 		if zone.id.strip_edges().is_empty() or zone_ids.has(zone.id):

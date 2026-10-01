@@ -4,7 +4,7 @@
 
 [resource]
 script = ExtResource("1")
-initial_population_cap = 7
+population_preset = "Normal"
 sight_range = 4.8
 peripheral_range = 1.25
 sight_half_angle_degrees = 72.0

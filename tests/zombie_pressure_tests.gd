@@ -8,11 +8,20 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	check.call(catalog.validate(game.world_map).is_empty(),
 		"zombie area resources have unique valid IDs, adjacency and stand points")
 	var initial := spawner._living_count()
-	var distribution := spawner.population_by_area()
-	check.call(initial == catalog.rules.initial_population_cap and initial == ZombieSpawner.POPULATION_LIMIT,
-		"initial pressure distribution preserves the existing seven-zombie cap")
-	check.call(int(distribution.get("corner_store", 0)) > int(distribution.get("safehouse", 0)),
-		"higher-pressure grocery receives more initial population than the safehouse")
+	var current_identity := QuickSave.map_identity(game.world_map.definition)
+	var legacy_identity := {"id": "orangeville_prototype", "format_version": 1,
+		"content_hash": "64917b6b843659b75e7621d51cfe79bd92df821324e02daf3ce3df03d71eca4f"}
+	check.call(QuickSave._compatible_map_identity(legacy_identity, current_identity), "audited bundled-map heat migration accepts the previous version-eight save identity")
+	var changed_identity := current_identity.duplicate()
+	changed_identity.content_hash = "changed_geometry"
+	check.call(not QuickSave._compatible_map_identity(legacy_identity, changed_identity), "legacy save compatibility never bypasses edited-map geometry validation")
+	var limits := catalog.rules.population_range(spawner.population_preset)
+	check.call(initial >= limits.x and initial <= limits.y,
+		"heatmap spawning selects a finite total within the saved population preset")
+	var candidates := game.world_map.initial_zombie_spawn_candidates()
+	check.call(candidates.size() > 16 and spawner.active_zombies.all(func(zombie: ZombieActor) -> bool:
+		return game.world_map.pressure_at(zombie.logical_position, zombie.floor_level) > 0.0),
+		"initial zombies come from weighted walkable heatmap cells rather than fixed area points")
 	var pressure_before := catalog.area("corner_store").pressure
 	var victim: ZombieActor = spawner.active_zombies[0]
 	victim.take_damage(ZombieActor.MAX_HEALTH)
@@ -28,11 +37,14 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	check.call(scheduled and spawner._living_count() == scheduled_count,
 		"authored pressure and adjacency schedule migration without changing population")
 	_reset_population(spawner)
-	var migrant: ZombieActor = null
-	for zombie in spawner.active_zombies:
-		if zombie.floor_level == 0 and game.world_map.zombie_area_id_at(zombie.logical_position, 0) == "roads":
-			migrant = zombie
-			break
+	var migrant: ZombieActor = spawner.active_zombies[0] if not spawner.active_zombies.is_empty() else null
+	if migrant != null:
+		# Migration destinations remain authored separately. Place a controlled
+		# idle actor on the road instead of assuming initial spawning uses that
+		# legacy population point.
+		migrant.logical_position = Vector2(8.5, 7.5)
+		migrant.floor_level = 0
+		migrant.stair_id = ""
 	var population_before := spawner._living_count()
 	var moved := migrant != null and migrant.request_migration(Vector2(16.5, 12.5), 0, "outskirts")
 	if migrant != null:

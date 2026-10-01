@@ -7,5 +7,9 @@ extends Resource
 @export var id := ""
 @export var level := 0
 @export var centerline := PackedVector2Array()
-@export_range(0.5, 16.0, 0.1) var width := 1.0
+## Road authoring is grid based.  Whole-cell widths avoid ambiguous half-road
+## occupancy and make water clipping deterministic.
+@export_range(1.0, 16.0, 1.0) var width := 1.0
 @export var terrain: MapTerrainDefinition
+## New brush strokes save exact grid coverage, including even widths.
+@export var grid_cells: Array[Vector2i] = []

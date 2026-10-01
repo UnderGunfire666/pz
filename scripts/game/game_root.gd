@@ -34,6 +34,14 @@ var startup_timings_ms: Dictionary = {}
 var _startup_started_usec := 0
 var _startup_stage_usec := 0
 var _startup_report_pending := true
+# FOV changes drive fog uploads, interior-content clipping and cutaways. They
+# need to feel immediate, but do not need to execute once per rendered frame.
+# Thirty updates per second leaves the delay below a frame pair while avoiding
+# repeated CPU/image work during continuous movement.
+const VISIBILITY_REFRESH_INTERVAL := 1.0 / 30.0
+var _visibility_refresh_left := 0.0
+var _last_visibility_floor := -999
+var _last_visibility_stair := "__unset__"
 
 
 func _startup_mark(stage: String) -> void:
@@ -51,6 +59,10 @@ func _ready() -> void:
 	GameTime.last_advanced_game_seconds = 0.0
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	world_map = WorldMap.new()
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--map="):
+			var authored := load(argument.trim_prefix("--map=")) as MapDefinition
+			if authored != null: world_map.definition = authored
 	world_map.name = "WorldMap"
 	add_child(world_map)
 	_startup_mark("Map + navigation")
@@ -72,6 +84,7 @@ func _ready() -> void:
 	actor_layer.add_child(player)
 	player.setup(world_map, player_state, world_map.definition.player_spawn)
 	player.attack_requested.connect(_on_player_attack)
+	_refresh_player_visibility(true)
 	_startup_mark("Player + character data")
 
 	interactions = InteractionSystem.new()
@@ -129,8 +142,7 @@ func _process(delta: float) -> void:
 		player_state.advance(game_seconds, player.exertion(), interactions.is_resting(),
 			int(nearby_counts["nearby"]), player.exertion() > 0.0)
 
-	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
-		player_state.perception_multiplier())
+	_refresh_player_visibility(false, delta)
 	_update_milestones()
 	notification_seconds_left = maxf(0.0, notification_seconds_left - delta)
 	if notification_seconds_left <= 0.0 and not player_state.is_dead():
@@ -145,6 +157,21 @@ func _process(delta: float) -> void:
 		startup_timings_ms["Engine start to first update"] = float(Time.get_ticks_usec()) / 1000.0
 		print("[Startup] Game initialization total: %.2f ms; engine start to first update: %.2f ms" % [
 			startup_timings_ms["Game initialization total"], startup_timings_ms["Engine start to first update"]])
+
+
+func _refresh_player_visibility(force: bool = false, delta: float = 0.0) -> void:
+	_visibility_refresh_left = maxf(0.0, _visibility_refresh_left - delta)
+	var state_changed := (
+		player.floor_level != _last_visibility_floor
+		or player.stair_id != _last_visibility_stair
+	)
+	if not force and not state_changed and _visibility_refresh_left > 0.0:
+		return
+	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
+		player_state.perception_multiplier())
+	_visibility_refresh_left = VISIBILITY_REFRESH_INTERVAL
+	_last_visibility_floor = player.floor_level
+	_last_visibility_stair = player.stair_id
 
 
 func _input(event: InputEvent) -> void:

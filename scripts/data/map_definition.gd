@@ -5,13 +5,14 @@ extends Resource
 ## Canonical immutable static map source. Runtime mutations belong in saves.
 @export var id := ""
 @export var display_name := ""
-@export var format_version := 1
+@export var format_version := 2
 @export var cell_size := Vector2i(64, 64)
 @export_range(0.1, 20.0, 0.01) var default_floor_spacing := 3.0
 @export var cells: Array[MapCellDefinition] = []
 @export var buildings: Array[MapBuildingInstanceDefinition] = []
 @export var wall_edges: Array[MapWallEdgeDefinition] = []
 @export var roads: Array[MapRoadDefinition] = []
+@export var indoor_floors: Array[MapIndoorFloorDefinition] = []
 @export var zones: Array[MapZoneDefinition] = []
 @export var stairs: Array[MapStairDefinition] = []
 @export var decorations: Array[MapDecorationDefinition] = []

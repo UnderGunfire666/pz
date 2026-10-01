@@ -8,6 +8,7 @@ var zone_type: String
 var pressure: float
 var safehouse: bool
 var floor_count := 1
+var has_roof := true
 var floor_ids: Array[int] = []
 var stair_ids: Array[String] = []
 var rooms: Array[RoomData] = []

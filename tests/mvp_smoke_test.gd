@@ -3,6 +3,7 @@ extends Node
 const MAP_MOD_REGISTRY = preload("res://scripts/systems/map_mod_registry.gd")
 const MAP_VALIDATOR = preload("res://scripts/systems/map_validator.gd")
 const SPATIAL_QUERY_TESTS = preload("res://tests/spatial_query_tests.gd")
+const MAP_AUTHORING_TESTS = preload("res://tests/map_authoring_tests.gd")
 
 var failures: Array[String] = []
 var checks := 0
@@ -70,6 +71,7 @@ func _run() -> void:
 	GameTime.set_process(false)
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	_test_priority_fixes()
+	MAP_AUTHORING_TESTS.run(_expect)
 	SPATIAL_QUERY_TESTS.run(game, _expect)
 	_test_world_and_stairs()
 	ZombiePressureTests.run(game, _expect)

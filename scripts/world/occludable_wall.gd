@@ -63,9 +63,14 @@ func cut_visible_regions(regions: Array[AABB], direction: Vector3, distance: flo
 
 
 func advance_fade(delta: float) -> void:
-	if not original_visible:
+	# Most walls are already at their requested opacity. Avoid a per-frame
+	# material write for every static wall; only the brief cutaway transition
+	# needs to touch the renderer.
+	if not original_visible or is_equal_approx(current_alpha, target_alpha):
 		return
 	current_alpha = move_toward(current_alpha, target_alpha, FADE_PER_SECOND * delta)
+	if is_equal_approx(current_alpha, target_alpha):
+		current_alpha = target_alpha
 	fade_material.albedo_color = Color(base_color.r, base_color.g, base_color.b, current_alpha)
 
 

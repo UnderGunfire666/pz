@@ -62,6 +62,8 @@ var _building_controllers_ready := false
 var _floor_material := _material(Color("393a34"))
 var _wall_material := _material(Color("686057"))
 var _grass_material := _material(Color("49694b"))
+var _soil_material := _material(Color("785f46"))
+var _water_material := _material(Color("315b78"))
 var _road_material := _material(Color("55595b"))
 var _indoor_material := _material(Color("89775e"))
 var _stair_material := _material(Color("a58b65"))
@@ -104,7 +106,6 @@ func setup(
 		occlusion_system.register_zone(OcclusionZone.new(OcclusionZone.node_bounds(controller), controller))
 	for prop in small_occluders:
 		occlusion_system.register_zone(OcclusionZone.new(OcclusionZone.node_bounds(prop), prop))
-	player.moved.connect(_on_local_player_moved)
 	_update_structure_visibility()
 	player.world_view = self
 
@@ -114,7 +115,10 @@ func _process(delta: float) -> void:
 		return
 	_update_camera(delta)
 	_refresh_streamed_floor_chunks()
-	_update_structure_visibility()
+	# Normal gameplay has already refreshed FOV from MVPGameRoot. A zero-delta
+	# direct call is used by deterministic preview/tests and must remain a fully
+	# self-contained presentation update.
+	_update_structure_visibility(delta <= 0.0)
 	_update_wall_fades(delta)
 	_update_lighting()
 	_update_fog()
@@ -389,6 +393,9 @@ func _load_streamed_floor_chunk(key: Vector3i) -> void:
 		if Vector2i(floor(midpoint.x / STREAM_CHUNK_SIZE), floor(midpoint.y / STREAM_CHUNK_SIZE)) != Vector2i(key.y, key.z):
 			continue
 		_add_wall_face(face, floor_level, nodes, parts)
+	for face: Dictionary in (world_map.floors[floor_level] as FloorData).visual_edges:
+		if chunk_rect.has_point((face["start"] + face["end"]) * 0.5):
+			_add_wall_face(face, floor_level, nodes, parts)
 	# Roof ownership is tied to its building's ground-floor chunk. This keeps a
 	# single roof instance while ground-floor streaming remains present whenever
 	# a player occupies any higher level of that building.
@@ -438,6 +445,8 @@ func _floor_material_kind(kind: String) -> String:
 		"road", "asphalt", "concrete": return "road"
 		"floor", "wall", "stairs", "indoor_floor": return "indoor"
 		"door": return "door"
+		"soil", "dirt": return "soil"
+		"water": return "water"
 		_: return "grass"
 
 
@@ -446,6 +455,8 @@ func _floor_material_for_kind(kind: String) -> Material:
 		"road": return _road_material
 		"indoor": return _indoor_material
 		"door": return _door_material
+		"soil": return _soil_material
+		"water": return _water_material
 		_: return _grass_material
 
 
@@ -462,6 +473,11 @@ func _add_wall_face(face: Dictionary, floor_level: int, nodes: Array[Node3D] = [
 	instance.position = Vector3(midpoint.x, float(floor_level) * world_map.floor_height + WALL_HEIGHT * 0.5, midpoint.y)
 	instance.rotation.y = -direction.angle()
 	instance.material_override = _wall_material
+	if face.get("kind", "wall") == "door":
+		instance.material_override = _door_material
+	elif face.get("kind", "wall") == "window":
+		mesh.size.y = WALL_HEIGHT * 0.5
+		instance.material_override = _water_material
 	add_child(instance)
 	nodes.append(instance)
 	var part := {"node": instance, "floor": floor_level, "building": String(face["building_id"]), "kind": "wall"}
@@ -472,6 +488,7 @@ func _add_wall_face(face: Dictionary, floor_level: int, nodes: Array[Node3D] = [
 
 
 func _add_roof(building: BuildingData, nodes: Array[Node3D] = [], parts: Array[Dictionary] = []) -> void:
+	if not building.has_roof: return
 	var instance := MeshInstance3D.new()
 	instance.name = "%s_Roof" % building.id
 	var mesh := BoxMesh.new()
@@ -675,18 +692,18 @@ func _unregister_structure_part(part: Dictionary) -> void:
 	(building_controllers[id] as BuildingVisibilityController).unregister_part(part["node"] as Node3D)
 
 
-func _on_local_player_moved(_position: Vector2) -> void:
-	# Consume after the following camera update so shader projection cannot lag.
-	_last_visibility_context = []
-
-
-func _update_structure_visibility() -> void:
-	# Constant-size fallback catches load/teleport and stair state changes without
-	# requiring gameplay setters. Only changed local context touches building nodes.
-	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
-		player.state.perception_multiplier())
-	var context := [player.logical_position, player.floor_level, player.stair_id, camera_yaw, visibility.revision,
-		camera_distance, camera.global_transform, get_viewport().get_visible_rect().size]
+func _update_structure_visibility(ensure_visibility: bool = true) -> void:
+	# The game root owns runtime FOV cadence. Direct callers (editor previews and
+	# tests) can retain the former self-contained behaviour by using the default.
+	if ensure_visibility:
+		visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
+			player.state.perception_multiplier())
+	# Presentation follows the FOV revision, while camera yaw/zoom and viewport
+	# changes still update cutaways immediately.
+	# Camera transform itself is deliberately absent: following the player changes
+	# it every frame even when the view direction and range are unchanged.
+	var context := [player.floor_level, player.stair_id, camera_yaw, visibility.revision,
+		camera_distance, get_viewport().get_visible_rect().size]
 	if context == _last_visibility_context:
 		return
 	_last_visibility_context = context

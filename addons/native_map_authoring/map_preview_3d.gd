@@ -14,7 +14,7 @@ func _ready() -> void:
 	stretch = true
 	custom_minimum_size = Vector2(300, 205)
 	viewport.size = Vector2i(600, 410)
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 	viewport.transparent_bg = false
 	add_child(viewport)
 	viewport.add_child(root)
@@ -39,6 +39,7 @@ func _ready() -> void:
 func show_map(definition: MapDefinition) -> void:
 	if not is_node_ready() or definition == null:
 		return
+	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 	for child in content.get_children():
 		child.queue_free()
 	var adapter := WorldMap.new()
@@ -49,8 +50,22 @@ func show_map(definition: MapDefinition) -> void:
 		_add_floor(adapter, level)
 		for face in adapter.wall_faces(level):
 			_add_wall(adapter, face, level)
+		for face in (adapter.floors[level] as FloorData).visual_edges:
+			_add_wall(adapter, face, level)
 	for building: BuildingData in adapter.buildings.values():
 		_add_roof(adapter, building)
+	for stair: StairLink in adapter.stairs.values():
+		for index in range(12):
+			var progress := (float(index) + 0.5) / 12.0
+			var point := stair.start.lerp(stair.end, progress)
+			var step := MeshInstance3D.new()
+			var box := BoxMesh.new()
+			box.size = Vector3(stair.length() / 12.0, 0.1, stair.width)
+			step.mesh = box
+			step.position = Vector3(point.x, lerpf(stair.from_floor, stair.to_floor, progress) * adapter.floor_height, point.y)
+			step.rotation.y = -stair.direction().angle()
+			step.material_override = _solid_material(Color("#a58b65"))
+			content.add_child(step)
 	var map_width := adapter.width
 	var map_height := adapter.height
 	adapter.free()
@@ -98,6 +113,7 @@ func _add_wall(adapter: WorldMap, face: Dictionary, level: int) -> void:
 
 
 func _add_roof(adapter: WorldMap, building: BuildingData) -> void:
+	if not building.has_roof: return
 	var mesh := MeshInstance3D.new()
 	var roof := BoxMesh.new()
 	roof.size = Vector3(building.bounds.size.x, 0.08, building.bounds.size.y)
@@ -117,9 +133,11 @@ func _append_quad(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: V
 
 func _tile_color(recipe: String) -> Color:
 	match recipe:
-		"asphalt": return Color("55595b")
+		"road", "asphalt": return Color("55595b")
 		"indoor_floor", "floor": return Color("89775e")
 		"door": return Color("936d43")
+		"soil", "dirt": return Color("785f46")
+		"water": return Color("315b78")
 		_: return Color("49694b")
 
 

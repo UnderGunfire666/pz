@@ -33,6 +33,9 @@ func setup(p_world_map: WorldMap, start_position: Vector2, p_player: PlayerContr
 	player = p_player
 	logical_position = start_position
 	target_position = start_position
+	if world_map.definition.id != "orangeville_prototype":
+		home_position = start_position
+		home_floor = 0
 	brain.traits.set_value("cautiousness", 0.78)
 	brain.traits.set_value("resourcefulness", 0.45)
 	brain.relationships["player"] = 0.0

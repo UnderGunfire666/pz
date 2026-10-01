@@ -5,7 +5,6 @@ extends Node
 ## destinations for physical migration; this node never replenishes deaths.
 signal player_attacked(world_position: Vector2)
 
-const POPULATION_LIMIT := 7 # Compatibility alias; authored default lives in world_rules.tres.
 const MIN_ACTIVE_SIMULATION_RADIUS := 12.0
 const ACTIVE_SIMULATION_RADIUS_MULTIPLIER := 2.0
 
@@ -18,6 +17,7 @@ var area_catalog := ZombieAreaCatalog.new()
 var active_zombies: Array[ZombieActor] = []
 var population_initialized := false
 var initial_population_count := 0
+var population_preset := "Normal"
 var migration_game_seconds := 0.0
 var _simulation_refresh_left := 0.0
 
@@ -28,32 +28,37 @@ func setup(p_world_map: WorldMap, p_actor_layer: Node2D, p_player: PlayerControl
 	actor_layer = p_actor_layer
 	player = p_player
 	player_state = p_player_state
+	population_preset = area_catalog.rules.population_preset
 
 
 func seed_demo_population() -> void:
 	if population_initialized: return
-	var used: Dictionary = {}
-	var counts: Dictionary = {}
-	var cap := area_catalog.rules.initial_population_cap
-	for _slot in range(cap):
-		var best: ZombieAreaDefinition = null
-		var best_score := -1.0
-		for area: ZombieAreaDefinition in area_catalog.areas.values():
-			var available := 0
-			for point in area.population_points:
-				if not used.has(point): available += 1
-			if available == 0: continue
-			var score := area.pressure / float(int(counts.get(area.id, 0)) + 1)
-			if score > best_score or (is_equal_approx(score, best_score) and (best == null or area.id < best.id)):
-				best = area
-				best_score = score
-		if best == null: break
-		for point in best.population_points:
-			if used.has(point): continue
-			used[point] = true
-			if _spawn(Vector2(point.x, point.y), int(point.z), true) != null:
-				counts[best.id] = int(counts.get(best.id, 0)) + 1
+	# Initial population is selected once from the map heatmap. Legacy area
+	# points remain available only as migration destinations; they no longer
+	# dictate where a fresh world starts its zombies.
+	var candidates := world_map.initial_zombie_spawn_candidates()
+	var random := RandomNumberGenerator.new()
+	random.seed = hash(world_map.definition.id)
+	var population_range := area_catalog.rules.population_range(population_preset)
+	var cap := mini(random.randi_range(population_range.x, population_range.y), candidates.size())
+	var spawned := 0
+	while spawned < cap and not candidates.is_empty():
+		var total_weight := 0.0
+		for candidate: Dictionary in candidates:
+			total_weight += float(candidate["weight"])
+		if total_weight <= 0.0:
+			break
+		var pick := random.randf() * total_weight
+		var selected_index := candidates.size() - 1
+		for index in range(candidates.size()):
+			pick -= float((candidates[index] as Dictionary)["weight"])
+			if pick <= 0.0:
+				selected_index = index
 				break
+		var selected: Dictionary = candidates[selected_index]
+		candidates.remove_at(selected_index)
+		if _spawn(selected["position"] as Vector2, int(selected["floor"]), true) != null:
+			spawned += 1
 	population_initialized = true
 	initial_population_count = _living_count()
 
@@ -83,7 +88,7 @@ func _request_one_migration() -> bool:
 		for area_id in source.adjacent_area_ids:
 			var area := area_catalog.area(area_id)
 			if area == null: continue
-			var score := area.pressure / float(int(area_counts.get(area.id, 0)) + 1)
+			var score := area.migration_weight() / float(int(area_counts.get(area.id, 0)) + 1)
 			destinations.append({"area": area, "score": score})
 		destinations.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["score"] > b["score"])
 		for destination_data in destinations:

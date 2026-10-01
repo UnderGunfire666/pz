@@ -17,6 +17,11 @@ extends Resource
 @export_enum("residential", "commercial", "industrial") var zone_type := "residential"
 @export_range(0.0, 1.0, 0.01) var zombie_pressure := 0.1
 @export var safehouse := false
+## Stored on instances rather than baked into a template so repeated stamps
+## become independent copies.  Runtime transform support is deliberately kept
+## data-first; old templates continue to load with their original orientation.
+@export_range(0, 3, 1) var rotation_quarter_turns := 0
+@export var mirrored := false
 
 
 func effective_bounds() -> Rect2i:

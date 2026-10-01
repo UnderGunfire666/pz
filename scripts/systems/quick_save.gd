@@ -105,6 +105,7 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		"rest_origin": game.rest_origin, "rest_floor": game.rest_floor,
 		"encountered": game.encountered_zombie, "encounter_origin": game.encounter_origin,
 		"population": {"initialized": game.zombie_spawner.population_initialized,
+			"preset": game.zombie_spawner.population_preset,
 			"initial_count": game.zombie_spawner.initial_population_count,
 			"migration_elapsed": game.zombie_spawner.migration_game_seconds}}
 
@@ -115,7 +116,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if data.get("version") == 5: data = _migrate_v5(data)
 	if data.get("version") == 6: data = _migrate_v6(data)
 	if data.get("version") == 7: data = _migrate_v7(data)
-	if data.get("map_identity") != map_identity(game.world_map.definition):
+	if not _compatible_map_identity(data.get("map_identity"), map_identity(game.world_map.definition)):
 		return false
 	# Validate the entire snapshot before replacing live state.
 	var required := ["version", "clock", "player", "facing", "health", "survival", "wounds",
@@ -179,7 +180,9 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		if not _valid_zombie_perception(entry["perception"]): return false
 	var population: Variant = data["population"]
 	if not population is Dictionary or not population.get("initialized") is bool or not population.get("initial_count") is int or not _number(population.get("migration_elapsed")): return false
-	if population["initial_count"] < data["zombies"].size() or population["initial_count"] > game.zombie_spawner.area_catalog.rules.initial_population_cap: return false
+	var preset: Variant = population.get("preset", "Normal")
+	if not preset is String or not preset in ["Very Few", "Few", "Normal", "Many", "Very Many", "Extremely Many"]: return false
+	if population["initial_count"] < data["zombies"].size() or population["initial_count"] > game.zombie_spawner.area_catalog.rules.population_range(preset).y: return false
 	if float(population["migration_elapsed"]) < 0.0: return false
 	var pack := InventoryGrid.new(false)
 	pack.penalty_limit = game.inventory.penalty_limit
@@ -300,6 +303,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 		zombie.load_perception_save_data(entry["perception"])
 	game.zombie_spawner.population_initialized = data["population"]["initialized"]
 	game.zombie_spawner.initial_population_count = data["population"]["initial_count"]
+	game.zombie_spawner.population_preset = data["population"].get("preset", "Normal")
 	game.zombie_spawner.migration_game_seconds = data["population"]["migration_elapsed"]
 	_restore_actor(game.npc, data["npc"])
 	_restore_survival(game.npc.survival, data["npc"]["survival"])
@@ -466,6 +470,17 @@ static func _migrate_v6(source: Dictionary) -> Dictionary:
 static func map_identity(definition: Resource) -> Dictionary:
 	return {"id": definition.get("id"), "format_version": definition.get("format_version"),
 		"content_hash": var_to_bytes(_static_content(definition)).hex_encode().sha256_text()}
+
+
+static func _compatible_map_identity(saved: Variant, current: Dictionary) -> bool:
+	if saved == current: return true
+	# Exact, audited migration pair: c8bcc79 bundled map -> heatmap format 2.
+	# Geometry is unchanged; existing zombies keep their saved state. Never
+	# accept arbitrary maps/edited geometry merely because their IDs match.
+	return saved == {"id": "orangeville_prototype", "format_version": 1,
+		"content_hash": "64917b6b843659b75e7621d51cfe79bd92df821324e02daf3ce3df03d71eca4f"} and current == {
+		"id": "orangeville_prototype", "format_version": 2,
+		"content_hash": "4e1f18a10eb7f476de9df5442477a9a9efb71db3402970884bf9a5b642d15b2d"}
 
 
 static func _static_content(value: Variant) -> Variant:

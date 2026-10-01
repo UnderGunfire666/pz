@@ -34,7 +34,8 @@ func setup(p_world_map: WorldMap, p_player: PlayerController, p_state: PlayerSta
 	player_state = p_state
 	inventory = p_inventory
 	visibility_system = p_visibility
-	_build_demo_interactions()
+	if world_map.definition.id == "orangeville_prototype":
+		_build_demo_interactions()
 	for point in points:
 		if point.has("container"):
 			inventory.world[point["id"]] = point["container"]

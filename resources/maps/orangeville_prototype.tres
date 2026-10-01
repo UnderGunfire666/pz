@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="MapDefinition" load_steps=21 format=3]
+[gd_resource type="Resource" script_class="MapDefinition" load_steps=25 format=3]
 
 [ext_resource type="Script" path="res://scripts/data/map_definition.gd" id="1_map"]
 [ext_resource type="Script" path="res://scripts/data/map_cell_definition.gd" id="2_cell"]
@@ -13,6 +13,25 @@
 [ext_resource type="Script" path="res://scripts/data/map_decoration_definition.gd" id="12_decoration"]
 [ext_resource type="Resource" path="res://resources/maps/terrain/grass.tres" id="7_grass"]
 [ext_resource type="Resource" path="res://resources/maps/terrain/asphalt.tres" id="8_asphalt"]
+[ext_resource type="Script" path="res://scripts/data/map_heat_paint.gd" id="13_heat"]
+
+[sub_resource type="Resource" id="Heat_outskirts"]
+script = ExtResource("13_heat")
+id = "migrated_outskirts_heat"
+rect = Rect2i(0, 0, 64, 64)
+pressure = 0.12
+
+[sub_resource type="Resource" id="Heat_east_west"]
+script = ExtResource("13_heat")
+id = "migrated_east_west_heat"
+rect = Rect2i(0, 7, 64, 1)
+pressure = 0.26
+
+[sub_resource type="Resource" id="Heat_north_south"]
+script = ExtResource("13_heat")
+id = "migrated_north_south_heat"
+rect = Rect2i(8, 0, 1, 64)
+pressure = 0.26
 
 [sub_resource type="Resource" id="TerrainPaint_grass"]
 script = ExtResource("4_paint")
@@ -24,6 +43,7 @@ terrain = ExtResource("7_grass")
 script = ExtResource("3_level")
 level = 0
 terrain_paints = Array[ExtResource("4_paint")]([SubResource("TerrainPaint_grass")])
+heat_paints = Array[ExtResource("13_heat")]([SubResource("Heat_outskirts"), SubResource("Heat_east_west"), SubResource("Heat_north_south")])
 
 [sub_resource type="Resource" id="MapCell_orangeville"]
 script = ExtResource("2_cell")
@@ -42,7 +62,7 @@ bounds = Rect2i(2, 2, 5, 4)
 floor_count = 2
 door_cell = Vector2i(4, 5)
 zone_type = "residential"
-zombie_pressure = 0.14
+zombie_pressure = 0.22
 safehouse = true
 
 [sub_resource type="Resource" id="Building_corner_store"]
@@ -55,7 +75,7 @@ bounds = Rect2i(10, 2, 7, 7)
 floor_count = 3
 door_cell = Vector2i(13, 8)
 zone_type = "commercial"
-zombie_pressure = 0.38
+zombie_pressure = 0.82
 
 [sub_resource type="Resource" id="Building_neighbour_house"]
 script = ExtResource("5_building")
@@ -67,7 +87,7 @@ bounds = Rect2i(2, 9, 4, 3)
 floor_count = 2
 door_cell = Vector2i(3, 11)
 zone_type = "residential"
-zombie_pressure = 0.16
+zombie_pressure = 0.34
 
 [sub_resource type="Resource" id="Stair_safehouse"]
 script = ExtResource("6_stair")
@@ -141,7 +161,7 @@ position = Vector2(0.9, 7.5)
 script = ExtResource("1_map")
 id = "orangeville_prototype"
 display_name = "Orangeville Prototype"
-format_version = 1
+format_version = 2
 cell_size = Vector2i(64, 64)
 default_floor_spacing = 3.0
 cells = Array[ExtResource("2_cell")]([SubResource("MapCell_orangeville")])
