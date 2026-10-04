@@ -2,12 +2,11 @@ class_name MVPGameRoot
 extends Node2D
 
 var world_map: WorldMap
-var visibility: VisibilitySystem
 var actor_layer: Node2D
 var player: PlayerController
 var camera: Camera3D
 var world_3d_view: World3DView
-var rotating_camera := false
+var mouse_released := false
 var character_catalog := CharacterCatalog.new()
 var player_state := PlayerState.new()
 var inventory := InventoryGrid.new(false)
@@ -34,14 +33,6 @@ var startup_timings_ms: Dictionary = {}
 var _startup_started_usec := 0
 var _startup_stage_usec := 0
 var _startup_report_pending := true
-# FOV changes drive fog uploads, interior-content clipping and cutaways. They
-# need to feel immediate, but do not need to execute once per rendered frame.
-# Thirty updates per second leaves the delay below a frame pair while avoiding
-# repeated CPU/image work during continuous movement.
-const VISIBILITY_REFRESH_INTERVAL := 1.0 / 30.0
-var _visibility_refresh_left := 0.0
-var _last_visibility_floor := -999
-var _last_visibility_stair := "__unset__"
 
 
 func _startup_mark(stage: String) -> void:
@@ -72,11 +63,6 @@ func _ready() -> void:
 	actor_layer.visible = false
 	add_child(actor_layer)
 
-	visibility = VisibilitySystem.new()
-	visibility.name = "VisibilitySystem"
-	add_child(visibility)
-	visibility.setup(world_map)
-
 	player = PlayerController.new()
 	player_state.setup_character(character_catalog)
 	player_state.setup_inventory(inventory)
@@ -84,14 +70,13 @@ func _ready() -> void:
 	actor_layer.add_child(player)
 	player.setup(world_map, player_state, world_map.definition.player_spawn)
 	player.attack_requested.connect(_on_player_attack)
-	_refresh_player_visibility(true)
 	_startup_mark("Player + character data")
 
 	interactions = InteractionSystem.new()
 	interactions.name = "InteractionSystem"
 	interactions.visible = false
 	add_child(interactions)
-	interactions.setup(world_map, player, player_state, inventory, visibility)
+	interactions.setup(world_map, player, player_state, inventory)
 	player_state.rags_requested.connect(_spawn_destroyed_clothing_rags)
 	player.action_intent.connect(func() -> void: interactions.interrupt_action())
 	interactions.notification_requested.connect(show_notification)
@@ -104,7 +89,6 @@ func _ready() -> void:
 	zombie_spawner.name = "ZombieSpawner"
 	add_child(zombie_spawner)
 	zombie_spawner.setup(world_map, actor_layer, player, player_state)
-	zombie_spawner.visibility_system = visibility
 	zombie_spawner.seed_demo_population()
 	zombie_spawner.player_attacked.connect(_on_player_attacked)
 
@@ -118,14 +102,17 @@ func _ready() -> void:
 	world_3d_view = World3DView.new()
 	world_3d_view.name = "World3DScene"
 	add_child(world_3d_view)
-	world_3d_view.setup(world_map, player, actor_layer, visibility, interactions)
+	world_3d_view.setup(world_map, player, actor_layer, interactions)
 	camera = world_3d_view.camera
-	_startup_mark("3D world + visibility")
+	_startup_mark("3D chunks + rendering")
 
 	hud = MVPHud.new()
 	hud.name = "HUD"
 	add_child(hud)
 	hud.setup(world_3d_view)
+	for panel: Control in [hud.details, hud.character_panel, hud.character_creation_panel, hud.help_panel]:
+		panel.visibility_changed.connect(_sync_mouse_capture)
+	_sync_mouse_capture()
 
 	GameTime.speed_changed.connect(_on_speed_changed)
 	player_state.died.connect(_on_player_died)
@@ -134,6 +121,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_sync_mouse_capture()
 	var game_seconds := GameTime.last_advanced_game_seconds
 	if game_seconds > 0.0 and not player_state.is_dead():
 		var nearby_counts := local_zombie_counts()
@@ -142,7 +130,6 @@ func _process(delta: float) -> void:
 		player_state.advance(game_seconds, player.exertion(), interactions.is_resting(),
 			int(nearby_counts["nearby"]), player.exertion() > 0.0)
 
-	_refresh_player_visibility(false, delta)
 	_update_milestones()
 	notification_seconds_left = maxf(0.0, notification_seconds_left - delta)
 	if notification_seconds_left <= 0.0 and not player_state.is_dead():
@@ -159,37 +146,50 @@ func _process(delta: float) -> void:
 			startup_timings_ms["Game initialization total"], startup_timings_ms["Engine start to first update"]])
 
 
-func _refresh_player_visibility(force: bool = false, delta: float = 0.0) -> void:
-	_visibility_refresh_left = maxf(0.0, _visibility_refresh_left - delta)
-	var state_changed := (
-		player.floor_level != _last_visibility_floor
-		or player.stair_id != _last_visibility_stair
-	)
-	if not force and not state_changed and _visibility_refresh_left > 0.0:
+func _sync_mouse_capture() -> void:
+	if hud == null or player == null:
 		return
-	visibility.refresh(player.logical_position, player.facing_direction, player.aim_mode, player.floor_level,
-		player_state.perception_multiplier())
-	_visibility_refresh_left = VISIBILITY_REFRESH_INTERVAL
-	_last_visibility_floor = player.floor_level
-	_last_visibility_stair = player.stair_id
+	var blocked := mouse_released or player_state.is_dead() or hud.has_open_panel()
+	player.controls_enabled = not blocked
+	hud.crosshair.visible = not blocked
+	var desired := Input.MOUSE_MODE_VISIBLE if blocked else Input.MOUSE_MODE_CAPTURED
+	if Input.mouse_mode != desired:
+		Input.mouse_mode = desired
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		mouse_released = true
+		_sync_mouse_capture()
+
+
+func _exit_tree() -> void:
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		interactions.interrupt_action()
+		if hud.has_open_panel():
+			hud.close_panels()
+		else:
+			mouse_released = true
+		_sync_mouse_capture()
+		get_viewport().set_input_as_handled()
+		return
 	if hud != null and hud.character_creation_panel != null and hud.character_creation_panel.visible:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_TAB:
+		mouse_released = false
 		hud.toggle_inventory()
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_C:
+		mouse_released = false
 		hud.toggle_character_panel()
 		get_viewport().set_input_as_handled()
 		return
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
-		rotating_camera = event.pressed
-		get_viewport().set_input_as_handled()
-		return
-	if event is InputEventMouseMotion and rotating_camera:
+	if event is InputEventMouseMotion and player.controls_enabled:
 		world_3d_view.orbit_camera(event.relative)
 		get_viewport().set_input_as_handled()
 
@@ -200,11 +200,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if not event.pressed:
 			return
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			if not hud.pointer_over_page(event.position): hud.adjust_zoom(1.12)
-			return
-		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			if not hud.pointer_over_page(event.position): hud.adjust_zoom(1.0 / 1.12)
+		if not player.controls_enabled:
+			if event.button_index == MOUSE_BUTTON_LEFT and not hud.has_open_panel() and not player_state.is_dead():
+				mouse_released = false
+				_sync_mouse_capture()
+				get_viewport().set_input_as_handled()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			interactions.interrupt_action()
@@ -224,6 +224,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.keycode == KEY_F9:
 		QuickSave.load_game(self)
 		return
+	if event.keycode == KEY_F10:
+		show_notification("Render chunks: %s" % world_3d_view.streamer.stats())
+		return
 	if player_state.is_dead():
 		if event.keycode == KEY_ENTER:
 			get_tree().reload_current_scene()
@@ -233,6 +236,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.keycode == KEY_ESCAPE:
 		interactions.interrupt_action()
+		return
+	if not player.controls_enabled:
 		return
 	if interactions.is_resting() and event.keycode in [KEY_SPACE, KEY_1, KEY_2]:
 		return
@@ -324,7 +329,7 @@ func _update_milestones() -> void:
 			continue
 		if zombie.floor_level != player.floor_level:
 			continue
-		if visibility.can_see_position(zombie.logical_position, zombie.floor_level):
+		if world_map.has_line_of_sight(player.logical_position, zombie.logical_position, player.floor_level, zombie.floor_level):
 			encountered_zombie = true
 			encounter_origin = player.logical_position
 	if encountered_zombie and player.logical_position.distance_to(encounter_origin) > 2.0:
@@ -375,7 +380,7 @@ func objective_text() -> String:
 func local_zombie_count(radius: float = 4.0) -> int:
 	var count := 0
 	for zombie: ZombieActor in zombie_spawner.active_zombies:
-		if is_instance_valid(zombie) and zombie.floor_level == player.floor_level and visibility.can_see_position(zombie.logical_position, zombie.floor_level) and player.logical_position.distance_to(zombie.logical_position) <= radius:
+		if is_instance_valid(zombie) and zombie.floor_level == player.floor_level and world_map.has_line_of_sight(player.logical_position, zombie.logical_position, player.floor_level, zombie.floor_level) and player.logical_position.distance_to(zombie.logical_position) <= radius:
 			count += 1
 	return count
 
@@ -386,7 +391,7 @@ func local_zombie_counts() -> Dictionary:
 		if not is_instance_valid(zombie) or zombie.floor_level != player.floor_level:
 			continue
 		var distance := player.logical_position.distance_to(zombie.logical_position)
-		if distance > 6.0 or not visibility.can_see_position(zombie.logical_position, zombie.floor_level):
+		if distance > 6.0 or not world_map.has_line_of_sight(player.logical_position, zombie.logical_position, player.floor_level, zombie.floor_level):
 			continue
 		result["nearby"] = int(result["nearby"]) + 1
 		if distance <= 4.0:

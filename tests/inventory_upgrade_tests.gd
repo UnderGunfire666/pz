@@ -93,7 +93,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	model.sides[0]["sort"] = "weight"
 	model.sides[0]["descending"] = false
 	model.sides[1]["expanded"]["cabinet_snack:"] = true
-	var pref_path := "/tmp/pz-ui-%d.cfg" % Time.get_ticks_usec()
+	var pref_path := OS.get_temp_dir().path_join("pz-ui-%d.cfg" % Time.get_ticks_usec())
 	check.call(model.save_preferences(pref_path) == OK, "UI preference file saves")
 	var loaded := InventoryPresentation.new()
 	loaded.load_preferences(pref_path)
@@ -109,13 +109,13 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	game.hud.details.show()
 	var inventory_center := game.hud.details.get_global_rect().get_center()
 	check.call(game.hud.pointer_over_page(inventory_center), "inventory page captures wheel input inside its visible bounds")
-	var zoom_before := game.world_3d_view.camera_distance
+	var zoom_before := game.world_3d_view.camera.fov
 	var wheel_event := InputEventMouseButton.new()
 	wheel_event.button_index = MOUSE_BUTTON_WHEEL_UP
 	wheel_event.pressed = true
 	wheel_event.position = inventory_center
 	game._unhandled_input(wheel_event)
-	check.call(is_equal_approx(game.world_3d_view.camera_distance, zoom_before),
+	check.call(is_equal_approx(game.world_3d_view.camera.fov, zoom_before),
 		"wheel input over inventory page never reaches world camera zoom")
 	game.hud.details.hide()
 	var hammer_row: TreeItem = null
@@ -162,7 +162,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	actions._update_active_action(100)
 	check.call(game.inventory.find_unit(plank_uid)["owner"] == "two_hands" and not game.inventory.has_free_hand(), "two-hand pickup occupies both hands exclusively")
 	check.call(game.inventory.held_weapon() == null, "ordinary two-hand item leaves default shove available")
-	var path := "/tmp/pz-hands-%d.save" % Time.get_ticks_usec()
+	var path := OS.get_temp_dir().path_join("pz-hands-%d.save" % Time.get_ticks_usec())
 	check.call(QuickSave.save_game(game, path) and QuickSave.load_game(game, path), "save/load preserves hand slots and cabinet contents")
 	check.call(game.inventory.find_unit(plank_uid)["owner"] == "two_hands" and game.inventory.all_valid(), "restored hand inventory satisfies global identities and limits")
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)

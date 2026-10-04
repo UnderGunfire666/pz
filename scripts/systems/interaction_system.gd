@@ -18,7 +18,7 @@ var world_map: WorldMap
 var player: PlayerController
 var player_state: PlayerState
 var inventory: InventoryGrid
-var visibility_system: VisibilitySystem
+const CONTAINER_REACH := 1.2
 var points: Array[Dictionary] = []
 var active_action: Dictionary = {}
 var pack_queue: Array[Dictionary] = []
@@ -28,12 +28,11 @@ var _last_hazard_check_floor := -999
 
 
 func setup(p_world_map: WorldMap, p_player: PlayerController, p_state: PlayerState,
-		p_inventory: InventoryGrid, p_visibility: VisibilitySystem) -> void:
+		p_inventory: InventoryGrid) -> void:
 	world_map = p_world_map
 	player = p_player
 	player_state = p_state
 	inventory = p_inventory
-	visibility_system = p_visibility
 	if world_map.definition.id == "orangeville_prototype":
 		_build_demo_interactions()
 	for point in points:
@@ -101,7 +100,7 @@ func _build_demo_interactions() -> void:
 		cabinet.capacity = (ContainerData.CABINET_DIMENSIONS.x * ContainerData.CABINET_DIMENSIONS.y
 			* ContainerData.CABINET_DIMENSIONS.z)
 		points.insert(points.size() - 1, {"id": id, "kind": "container", "label": labels[index], "position": locations[index],
-			"floor": 0, "radius": VisibilitySystem.SELF_VISION_RADIUS, "container": cabinet, "furniture": true})
+			"floor": 0, "radius": CONTAINER_REACH, "container": cabinet, "furniture": true})
 	var clothing_loot: Array[ItemStack] = []
 	clothing_loot.append(ItemStack.new(ItemDefinition.clothing("shirt", "Cotton shirt", "inner_top",
 		["Torso", "Left Arm", "Right Arm"], {"Torso": 15, "Left Arm": 10, "Right Arm": 10},
@@ -133,7 +132,7 @@ func _build_demo_interactions() -> void:
 	flashlight.switchable = true
 	clothing_loot.append_array([ItemStack.new(needle), ItemStack.new(thread), ItemStack.new(ClothingSystem.rag_definition(), 3), ItemStack.new(flashlight)])
 	points.insert(points.size() - 1, {"id": "wardrobe", "kind": "container", "label": "Test wardrobe",
-		"position": Vector2(4.65, 6.9), "floor": 0, "radius": VisibilitySystem.SELF_VISION_RADIUS,
+		"position": Vector2(4.65, 6.9), "floor": 0, "radius": CONTAINER_REACH,
 		"container": ContainerData.new("wardrobe", "Test wardrobe", clothing_loot), "furniture": true})
 
 
@@ -161,6 +160,21 @@ func _process(delta: float) -> void:
 
 func request_interaction() -> void:
 	if player_state.is_dead(): return
+	var barrier := world_map.nearest_barrier(player.logical_position, player.floor_level)
+	if not barrier.is_empty():
+		var open := not bool(barrier["open"])
+		if world_map.set_barrier_open(barrier["id"], open):
+			var sound_position: Vector2 = (Vector2(barrier["start"]) + Vector2(barrier["end"])) * 0.5
+			NoiseBus.emit_spatial_noise(world_map, ActorPerception.point(world_map, sound_position,
+				int(barrier["level"]), "", ActorPerception.CHEST_HEIGHT), 3.5,
+				String(barrier["kind"]), int(barrier["level"]), 1.0, "", player.get_instance_id())
+			if not open:
+				player.logical_position = world_map.resolve_closed_barrier_overlap(
+					barrier["id"], player.logical_position, player.floor_level,
+					-player.facing_direction)
+				player.stair_id = ""
+			notification_requested.emit("%s %s." % ["Door" if barrier["kind"] == "door" else "Window", "opened" if open else "closed"])
+		return
 	var point := nearest_point()
 	if point.is_empty():
 		notification_requested.emit("No reachable interaction on this floor.")
@@ -193,7 +207,7 @@ func _reachable(point: Dictionary) -> bool:
 			return false
 	return (player.stair_id.is_empty()
 		and int(point["floor"]) == player.floor_level
-		and player.logical_position.distance_to(point["position"]) <= (VisibilitySystem.SELF_VISION_RADIUS if point.has("container") else float(point["radius"]))
+		and player.logical_position.distance_to(point["position"]) <= (CONTAINER_REACH if point.has("container") else float(point["radius"]))
 		and world_map.has_line_of_sight(player.logical_position, point["position"], player.floor_level))
 
 
@@ -213,6 +227,9 @@ func nearest_point() -> Dictionary:
 func prompt() -> String:
 	if not active_action.is_empty():
 		return "%s  %d%% · move / aim / Esc to cancel" % [active_action["label"], int(action_progress() * 100.0)]
+	var barrier := world_map.nearest_barrier(player.logical_position, player.floor_level)
+	if not barrier.is_empty():
+		return "[E] %s %s" % ["Close" if barrier["open"] else "Open", "door" if barrier["kind"] == "door" else "window"]
 	var point := nearest_point()
 	if point.is_empty():
 		return ""
@@ -265,7 +282,7 @@ func _start_container_search(point: Dictionary) -> void:
 		return
 	_start_action("search", "Searching %s" % container.display_name, SEARCH_DURATION_GAME_SECONDS,
 		point, maxf(0.0, SEARCH_DURATION_GAME_SECONDS - container.search_progress_seconds))
-	NoiseBus.emit_noise(player.logical_position, 2.5, "searching", player.floor_level)
+	NoiseBus.emit_actor_noise(player, 2.5, "searching")
 
 
 func _start_action(kind: String, label: String, duration: float, payload: Dictionary,

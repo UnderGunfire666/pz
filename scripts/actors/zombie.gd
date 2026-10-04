@@ -22,6 +22,7 @@ var stair_id := ""
 var health := MAX_HEALTH
 var target_position := Vector2.ZERO
 var target_floor := 0
+var target_stair_id := ""
 var has_target := false
 var attack_cooldown := 0.0
 var facing_direction := Vector2.DOWN
@@ -33,6 +34,8 @@ var search_expires_at := 0.0
 var stimulus_lock_until := 0.0
 var last_stimulus_time := -1.0
 var last_stimulus_loudness := 0.0
+var last_heard_strength := 0.0
+var last_hearing: Dictionary = {}
 var migration_area_id := ""
 var _perception_game_seconds_left := 0.0
 var _search_step := 0
@@ -94,13 +97,14 @@ func _process(delta: float) -> void:
 	_update_memory()
 	if has_target:
 		_move_toward_target(scaled_delta)
-		if floor_level == target_floor and stair_id.is_empty() and logical_position.distance_to(target_position) <= 0.20:
+		if ((target_stair_id.is_empty() and floor_level == target_floor and stair_id.is_empty()) \
+			or (not target_stair_id.is_empty() and stair_id == target_stair_id)) and logical_position.distance_to(target_position) <= 0.20:
 			_reached_target()
 	if _can_hit_player() and attack_cooldown <= 0.0:
 		attack_cooldown = 1.8
 		player_state.receive_hit("Scratch", "Right Arm", 12.0, true)
 		attacked_player.emit(logical_position)
-		NoiseBus.emit_noise(logical_position, 3.0, "struggle", floor_level)
+		NoiseBus.emit_actor_noise(self, 3.0, "struggle")
 
 
 func _update_perception() -> void:
@@ -117,7 +121,8 @@ func _nearest_visible_target() -> Node:
 	for candidate in get_tree().get_nodes_in_group("zombie_targets"):
 		if not is_instance_valid(candidate): continue
 		if candidate is PlayerController and candidate.state.is_dead(): continue
-		var distance := logical_position.distance_to(candidate.logical_position)
+		var distance := ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.0).distance_to(
+			ActorPerception.point(world_map, candidate.logical_position, candidate.floor_level, candidate.stair_id, 0.0))
 		if distance < nearest_distance and _can_see_actor(candidate):
 			nearest = candidate
 			nearest_distance = distance
@@ -125,35 +130,18 @@ func _nearest_visible_target() -> Node:
 
 
 func _can_see_actor(actor: Node) -> bool:
-	var actor_position: Vector2 = actor.get("logical_position")
-	var actor_floor: int = actor.get("floor_level")
-	var actor_stair: String = actor.get("stair_id")
-	var distance := logical_position.distance_to(actor_position)
 	var sight_range := _rule("sight_range", VISUAL_RANGE) * lerpf(0.55, 1.0, world_map.ambient_light())
-	if distance > sight_range: return false
-	if not stair_id.is_empty() or not actor_stair.is_empty():
-		if not stair_id.is_empty() and stair_id == actor_stair: return true
-		if not actor_stair.is_empty() and stair_id.is_empty() and floor_level == actor_floor:
-			return world_map.has_line_of_sight(logical_position, actor_position, floor_level)
-		return false
-	if floor_level != actor_floor or not world_map.has_line_of_sight(logical_position, actor_position, floor_level, actor_floor): return false
-	if distance <= _rule("peripheral_range", 1.25): return true
-	var offset := actor_position - logical_position
-	return absf(wrapf(offset.angle() - facing_direction.angle(), -PI, PI)) <= deg_to_rad(_rule("sight_half_angle_degrees", 72.0))
-
+	return ActorPerception.sees_actor(world_map, self, actor, sight_range,
+		_rule("sight_half_angle_degrees", 72.0), _rule("peripheral_range", 1.25))
 
 func _observe_target(actor: Node) -> void:
 	var actor_position: Vector2 = actor.get("logical_position")
 	var actor_floor: int = actor.get("floor_level")
 	var actor_stair: String = actor.get("stair_id")
 	target_actor_id = "player" if actor is PlayerController else String(actor.get("actor_id"))
-	if not actor_stair.is_empty() and world_map.stairs.has(actor_stair):
-		var link: StairLink = world_map.stairs[actor_stair]
-		target_floor = link.to_floor if actor_floor == link.from_floor else link.from_floor
-		target_position = link.end if target_floor == link.to_floor else link.start
-	else:
-		target_position = actor_position
-		target_floor = actor_floor
+	target_position = actor_position
+	target_floor = actor_floor
+	target_stair_id = actor_stair
 	awareness = Awareness.VISUAL
 	has_target = true
 	visual_memory_expires_at = GameTime.elapsed_game_seconds + _rule("visual_memory_game_seconds", 90.0)
@@ -185,6 +173,16 @@ func _begin_search() -> void:
 	target_actor_id = ""
 	search_expires_at = GameTime.elapsed_game_seconds + _rule("search_game_seconds", 35.0)
 	_search_step = 0
+	if not stair_id.is_empty() and world_map.stairs.has(stair_id):
+		var link: StairLink = world_map.stairs[stair_id]
+		var go_up := link.progress_at(logical_position) >= 0.5
+		target_position = link.end if go_up else link.start
+		target_floor = link.to_floor if go_up else link.from_floor
+		target_stair_id = ""
+		has_target = true
+		reset_navigation()
+		return
+	target_stair_id = ""
 	_set_next_search_point()
 
 
@@ -208,35 +206,34 @@ func hear_noise(stimulus: NoiseStimulus) -> void:
 	# Dormant actors retain memory but only player proximity wakes them.
 	if (not simulation_active or world_map == null or health <= 0 or is_queued_for_deletion() or awareness == Awareness.VISUAL
 		or GameTime.simulation_scale() <= 0.0): return
-	var audible_range := maxf(0.0, stimulus.audible_range * stimulus.loudness)
-	if floor_level == stimulus.floor_level and logical_position.distance_squared_to(stimulus.world_position) > audible_range * audible_range: return
-	if stimulus.world_time < last_stimulus_time: return
-	if world_map.sound_cost(logical_position, floor_level, stimulus.world_position, stimulus.floor_level) > stimulus.audible_range * stimulus.loudness: return
 	var now := GameTime.elapsed_game_seconds
-	if now < stimulus_lock_until and stimulus.loudness <= last_stimulus_loudness * 1.25: return
-	var heard_position := stimulus.world_position
-	var heard_floor := stimulus.floor_level
-	for link: StairLink in world_map.query_stairs(heard_floor, Rect2(heard_position, Vector2.ZERO)):
-		if link.contains(heard_position) and heard_floor in [link.from_floor, link.to_floor]:
-			heard_floor = link.to_floor if heard_floor == link.from_floor else link.from_floor
-			heard_position = link.end if heard_floor == link.to_floor else link.start
-			break
-	if target_floor != heard_floor and stair_id.is_empty(): reset_navigation()
-	target_position = heard_position
-	target_floor = heard_floor
+	if stimulus == null or stimulus.world_time < last_stimulus_time: return
+	var heard := ActorHearing.sample(world_map, self, stimulus, now)
+	if heard.is_empty(): return
+	# A last visual observation remains stronger evidence during its switch lock.
+	if now < stimulus_lock_until:
+		if awareness == Awareness.VISUAL_MEMORY or float(heard["strength"]) <= last_heard_strength * 1.25: return
+	if stair_id.is_empty() and (target_floor != int(heard["floor"]) or target_position.distance_to(heard["position"]) > 0.2): reset_navigation()
+	target_position = heard["position"]
+	target_floor = int(heard["floor"])
+	target_stair_id = ""
 	target_actor_id = ""
 	awareness = Awareness.SOUND
 	has_target = true
 	last_stimulus_time = stimulus.world_time
 	last_stimulus_loudness = stimulus.loudness
-	sound_memory_expires_at = now + _rule("sound_memory_game_seconds", 55.0)
+	last_heard_strength = float(heard["strength"])
+	last_hearing = heard
+	NoiseBus.record_hearing(self, heard)
+	sound_memory_expires_at = stimulus.world_time + _rule("sound_memory_game_seconds", 55.0)
 	stimulus_lock_until = now + _rule("stimulus_switch_lock_game_seconds", 6.0)
 
 
-func observe_group_target(position: Vector2, floor: int, observed_at: float) -> void:
+func observe_group_target(position: Vector2, floor: int, observed_at: float, observed_stair: String = "") -> void:
 	if awareness in [Awareness.VISUAL, Awareness.VISUAL_MEMORY] or observed_at < last_stimulus_time: return
 	target_position = position
 	target_floor = floor
+	target_stair_id = observed_stair
 	target_actor_id = ""
 	awareness = Awareness.GROUP
 	has_target = true
@@ -249,6 +246,7 @@ func request_migration(position: Vector2, floor: int, area_id: String) -> bool:
 	if awareness != Awareness.IDLE or has_target: return false
 	target_position = position
 	target_floor = floor
+	target_stair_id = ""
 	migration_area_id = area_id
 	awareness = Awareness.MIGRATION
 	has_target = true
@@ -259,20 +257,19 @@ func request_migration(position: Vector2, floor: int, area_id: String) -> bool:
 func _clear_target() -> void:
 	has_target = false
 	awareness = Awareness.IDLE
+	stimulus_lock_until = 0.0
+	last_heard_strength = 0.0
 	target_actor_id = ""
+	target_stair_id = ""
 	migration_area_id = ""
 	reset_navigation()
 
 
 func _can_hit_player() -> bool:
 	if player_state.is_dead(): return false
-	var planar_distance := logical_position.distance_to(player.logical_position)
-	if not stair_id.is_empty() or not player.stair_id.is_empty():
-		if stair_id.is_empty() or stair_id != player.stair_id: return false
-		var height_difference := world_map.elevation_at(logical_position, floor_level, stair_id) - world_map.elevation_at(player.logical_position, player.floor_level, player.stair_id)
-		return Vector2(planar_distance, height_difference).length() < 0.72
-	return floor_level == player.floor_level and planar_distance < 0.72 and world_map.has_line_of_sight(logical_position, player.logical_position, floor_level, player.floor_level)
-
+	var from := ActorPerception.point(world_map, logical_position, floor_level, stair_id, ActorPerception.CHEST_HEIGHT)
+	var to := ActorPerception.point(world_map, player.logical_position, player.floor_level, player.stair_id, ActorPerception.CHEST_HEIGHT)
+	return from.distance_to(to) < 0.72 and world_map.has_spatial_line_of_sight(from, to)
 
 func take_damage(amount: int) -> void:
 	if amount <= 0 or health <= 0 or is_queued_for_deletion(): return
@@ -290,7 +287,7 @@ func reset_navigation() -> void:
 func _move_toward_target(scaled_delta: float) -> void:
 	var previous := logical_position
 	var result := _navigation.advance(world_map, logical_position, floor_level, stair_id,
-		target_position, target_floor, MOVE_SPEED, scaled_delta)
+		target_position, target_floor, MOVE_SPEED, scaled_delta, target_stair_id)
 	logical_position = result["position"]
 	floor_level = int(result["floor"])
 	stair_id = String(result["stair_id"])
@@ -303,21 +300,25 @@ func _rule(property: String, fallback: float) -> float:
 
 
 func perception_save_data() -> Dictionary:
-	return {"awareness": int(awareness), "target_actor_id": target_actor_id,
+	return {"awareness": int(awareness), "target_actor_id": target_actor_id, "target_stair_id": target_stair_id,
 		"visual_memory_expires_at": visual_memory_expires_at, "sound_memory_expires_at": sound_memory_expires_at,
 		"search_expires_at": search_expires_at, "stimulus_lock_until": stimulus_lock_until,
 		"last_stimulus_time": last_stimulus_time, "last_stimulus_loudness": last_stimulus_loudness,
+		"last_heard_strength": last_heard_strength,
 		"migration_area_id": migration_area_id, "facing": facing_direction}
 
 
 func load_perception_save_data(data: Dictionary) -> void:
 	awareness = int(data["awareness"])
 	target_actor_id = data["target_actor_id"]
+	target_stair_id = data.get("target_stair_id", "")
 	visual_memory_expires_at = data["visual_memory_expires_at"]
 	sound_memory_expires_at = data["sound_memory_expires_at"]
 	search_expires_at = data["search_expires_at"]
 	stimulus_lock_until = data["stimulus_lock_until"]
 	last_stimulus_time = data["last_stimulus_time"]
 	last_stimulus_loudness = data["last_stimulus_loudness"]
+	last_heard_strength = float(data.get("last_heard_strength", 0.0))
+	last_hearing = {}
 	migration_area_id = data["migration_area_id"]
 	facing_direction = data["facing"]

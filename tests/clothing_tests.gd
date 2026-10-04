@@ -115,13 +115,13 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 		"character panel opens independently and closes the inventory overlay")
 	check.call(game.hud.pointer_over_page(game.hud.character_panel.get_global_rect().get_center()),
 		"character page captures wheel input inside its visible bounds")
-	var zoom_before := game.world_3d_view.camera_distance
+	var zoom_before := game.world_3d_view.camera.fov
 	var wheel_event := InputEventMouseButton.new()
 	wheel_event.button_index = MOUSE_BUTTON_WHEEL_DOWN
 	wheel_event.pressed = true
 	wheel_event.position = game.hud.character_panel.get_global_rect().get_center()
 	game._unhandled_input(wheel_event)
-	check.call(is_equal_approx(game.world_3d_view.camera_distance, zoom_before),
+	check.call(is_equal_approx(game.world_3d_view.camera.fov, zoom_before),
 		"wheel input over character page never reaches world camera zoom")
 	game.hud.toggle_character_panel()
 	var needle := ItemStack.new(ItemDefinition.new("repair_needle", "Needle", Vector3.ONE, 0.01, ["needle", "tool"]))

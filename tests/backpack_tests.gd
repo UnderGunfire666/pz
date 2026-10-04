@@ -119,7 +119,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	actions.interrupt_action("Test")
 	check.call(is_equal_approx(game.player_state.survival.thirst, 20), "interrupting before drink preserves liquid and hydration")
 	actions.request_use(bottle_uid)
-	var path := "/tmp/pz-backpack-%d.save" % Time.get_ticks_usec()
+	var path := OS.get_temp_dir().path_join("pz-backpack-%d.save" % Time.get_ticks_usec())
 	check.call(QuickSave.save_game(game, path), "save captures timed use and held bottle")
 	var data := QuickSave.snapshot(game)
 	check.call(QuickSave.validate(data, game), "nested inventory and action snapshot validates")

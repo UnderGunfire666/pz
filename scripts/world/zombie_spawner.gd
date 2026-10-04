@@ -5,14 +5,12 @@ extends Node
 ## destinations for physical migration; this node never replenishes deaths.
 signal player_attacked(world_position: Vector2)
 
-const MIN_ACTIVE_SIMULATION_RADIUS := 12.0
-const ACTIVE_SIMULATION_RADIUS_MULTIPLIER := 2.0
+const ACTIVE_SIMULATION_RADIUS := 24.0
 
 var world_map: WorldMap
 var actor_layer: Node2D
 var player: PlayerController
 var player_state: PlayerState
-var visibility_system: VisibilitySystem
 var area_catalog := ZombieAreaCatalog.new()
 var active_zombies: Array[ZombieActor] = []
 var population_initialized := false
@@ -104,7 +102,6 @@ func _request_one_migration() -> bool:
 func _valid_migration_destination(zombie: ZombieActor, position: Vector2, floor: int) -> bool:
 	if not world_map.can_stand(position, floor): return false
 	if position.distance_to(player.logical_position) < area_catalog.rules.migration_player_exclusion_radius: return false
-	if floor == player.floor_level and visibility_system != null and visibility_system.can_see_position(position, floor): return false
 	return not world_map.find_path(zombie.logical_position, zombie.floor_level, position, floor).is_empty()
 
 
@@ -129,8 +126,8 @@ func share_visual_observation(observer: ZombieActor, position: Vector2, floor: i
 		if joined >= area_catalog.rules.maximum_loose_group_size: break
 		if zombie == observer or not is_instance_valid(zombie) or zombie.health <= 0: continue
 		if zombie.floor_level != observer.floor_level or zombie.logical_position.distance_to(observer.logical_position) > area_catalog.rules.convergence_radius: continue
-		if not world_map.has_line_of_sight(observer.logical_position, zombie.logical_position, observer.floor_level): continue
-		zombie.observe_group_target(position, floor, GameTime.elapsed_game_seconds)
+		if not ActorPerception.sees_actor(world_map, zombie, observer, area_catalog.rules.convergence_radius): continue
+		zombie.observe_group_target(position, floor, GameTime.elapsed_game_seconds, observer.target_stair_id)
 		joined += 1
 
 
@@ -144,8 +141,7 @@ func population_by_area() -> Dictionary:
 
 
 func _refresh_simulation_range() -> void:
-	var vision_radius := visibility_system.vision_radius if visibility_system != null else 0.0
-	var active_radius := maxf(MIN_ACTIVE_SIMULATION_RADIUS, vision_radius * ACTIVE_SIMULATION_RADIUS_MULTIPLIER)
+	var active_radius := ACTIVE_SIMULATION_RADIUS
 	for zombie: ZombieActor in active_zombies:
 		if not is_instance_valid(zombie) or zombie.health <= 0:
 			continue

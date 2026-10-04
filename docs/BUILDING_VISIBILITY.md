@@ -1,91 +1,61 @@
-# Building visibility and local occlusion
+# 第一人称可见性与分块渲染
 
-The logical player is `PlayerController` (Node2D); `World3DView` supplies its 3D
-representation and orthographic camera. `WorldMap` owns building membership,
-floor support and stair progress. Visibility never modifies that simulation.
+本文描述当前运行实现，替代早期正交视角的楼层剖切、墙体淡出及探索迷雾方案。
 
-At startup the existing independent meshes are registered and reparented under:
+## 画面规则
 
-```text
-World3DView
-  <building>_Visibility (BuildingVisibilityController)
-    Floor_01 (BuildingFloor)
-      floor meshes, wall meshes, stair geometry
-    Floor_02 ...
-    roof mesh
+- 没有玩家视野半径、视野锥、近身可见圆、探索记录或未探索黑雾。
+- 已加载的建筑、物资、树木及角色进入正常三维渲染；摄像机视锥与深度缓冲负责屏幕外剔除和实体遮挡。墙体、楼板、屋顶不会透明，其他楼层的角色不会由楼层规则强制隐藏。
+- 第一人称固定眼高 1.62、垂直 FOV 75°，水平转向无限制，俯仰限制 ±85°。`PlayerViewRig` 保留后续第三人称相机偏移与碰撞的扩展位置。
+- 远裁面默认 64 个世界单位，属于渲染性能设置，独立于角色感知属性。日夜光照仍有效；“全可见”不意味着透视墙体或取消夜晚。
+- 碰撞、交互距离、近战、僵尸视听感知和导航仍由模拟系统判定，不能通过节点是否显示推断。僵尸模拟半径独立为 24 单位，与渲染范围解耦。
+
+## 数据与所有权
+
+`WorldMap` 保留全部模拟地图、门窗状态和导航数据。`WorldChunkBuilder` 为当前地图建立稀疏渲染索引，`WorldChunkStreamer` 只负责网格驻留和构建调度；二者不卸载或修改模拟地图。
+
+每个水平地块为 16×16，包含该位置的所有楼层。地面、静态墙、屋顶、楼梯和装饰物按材质合并成网格。不同房间不再为探索遮罩拆成独立节点。屋顶和长墙按地块边界切分，边界墙采用半开区间归属，避免重复墙面和中点归属造成的缺失。楼梯洞口按楼层和地块索引，避免每个地面格遍历全图楼梯。
+
+门窗独立于静态网格，开关只更新相关网格的显示，同时由 `WorldMap` 更新碰撞、寻路与玩法 LOS。构建期间发生门窗变化时，在地块发布到场景前再次读取当前状态。
+
+交互物体根据已驻留地块创建和回收。角色同样根据驻留范围建立模型，墙体遮挡交给深度缓冲；没有玩家朝向或探索历史驱动的实体隐藏。第一人称本地身体模型继续隐藏。
+
+## 加载、缓存与构建预算
+
+- 所需半径覆盖摄像机远平面的角点，考虑宽高比以及任意俯仰／转向，再添加 16 单位预加载带。转身不需要卸载和重建周围世界。
+- 摄像机移动约 4 单位或投影范围改变时更新请求，按照地块到摄像机的距离排序。
+- 每帧构建目标预算 2 毫秒，最多发布 2 个地块。单块内部的地面、墙、装饰物和网格提交均可分阶段跨帧继续；完成前不加入渲染场景，避免半成品地块。
+- 预算是软上限：不可拆分的一次网格提交或索引操作可能略微超时。可复用几何的顶点数组在初始化时缓存，移动过程中不反复创建 PrimitiveMesh 并同步读取渲染线程数据。
+- 不再需要的地块先隐藏，最多额外缓存 12 块，且限制在额外 32 单位保留带内；其余释放。重新进入缓存区复用原网格。
+- 快速移动会取消不再需要的排队请求及部分构建任务。进入游戏和读档会同步准备当前范围，普通移动使用逐帧预算。
+- F10 输出已驻留、所需、待构建块数、本帧构建时间和累计构建次数。
+
+这里采用摄像机视锥剔除和深度遮挡，没有实现额外的门户系统、烘焙遮挡器或 GPU 遮挡剔除。地块元数据和模拟地图仍常驻；这次工作不等于导航和世界模拟已分区卸载。
+
+## 存档
+
+v10 不再写入 `seen`。v9 及更早版本沿原迁移链升级，在内存副本上丢弃探索数据；角色、物品、门窗、NPC 与僵尸状态按原验证规则恢复。
+
+默认槽为 `user://afterlight_mvp_v10.save`，缺失时查找 v9–v3。旧槽不改写，下一次默认保存使用 v10 路径。损坏或地图身份不匹配的存档在修改运行状态前拒绝。测试覆盖真实 v9 文件读取前后的字节一致性。
+
+## 检查与测量
+
+回归：
+
+```sh
+godot --headless --path . res://tests/mvp_smoke_test.tscn
 ```
 
-`BuildingFloor` owns its geometry and caches `OccludableWall` handles. Controllers
-expose `set_active_floor(index)`, `set_cutaway(enabled)` and `update_local_view`.
-Floors are zero-indexed, matching WorldMap. Mesh transforms and original wall/roof
-visibility are preserved; no materials are made transparent.
+实际渲染与流送采样：
 
-The view handles local-player movement events and camera orbit changes. A small
-context comparison per frame also catches teleport/load and stair state changes.
-Changed context uses the map's constant-time tile lookup. `BuildingOcclusionSystem`
-queries an 8-unit spatial hash along the camera corridors for the player and
-currently visible contents, updating nearby blocked
-buildings/props and restoring previously blocked objects. There are no city-wide
-frame scans, physics raycasts or NPC visibility inputs. `player_building_changed`,
-`player_display_floor_changed` and controller `state_changed` expose transitions.
-Area3D is unnecessary for the current logical movement architecture.
+```sh
+godot --path . res://tests/streaming_benchmark.tscn
+```
 
-Interior mode hides the roof and parents of all floors above the displayed floor.
-Lower floors remain rendered. A wall is cut when the player and camera
-direction are on opposite sides of its plane, or when it obstructs currently
-visible contents. The plane-side check keeps rear wall segments
-visible even when the player stands near a corner. The earlier diagonal-depth
-test could incorrectly remove far lateral segments of rear walls. Camera orbit
-updates the plane-side rule without raycasting. Cached planes/bounds assume
-static geometry.
+后者需要真实图形后端；画面保存至 `.godot/streaming-*.png`。示例场景在测量时冻结模拟，合成场景只测渲染与流送，不代表完整 AI 或导航压力测试。
 
-Display floor changes at stair midpoint in both directions. Exiting restores
-the architectural shell's original visibility, including direct moves
-between buildings and load/teleport. Room-content privacy remains independent.
+已记录的本机样本：Godot 4.7.2，D3D12 Forward+，RTX 4070 SUPER，1280×720。相同三个示例机位，旧渲染流程的绘制调用约为 138／229／144，新流程约为 50／77／48–50；实体活动状态可能带来少量波动。新流程渲染线程 CPU 的 p95 约为 0.15–0.22 毫秒，GPU p95 约为 0.11–0.12 毫秒。整帧约 6.05 毫秒，接近屏幕刷新节奏，不能据此将绘制调用降幅解释为帧率增幅。
 
-Room content is authorized by `WorldTileData.room_id`: indoor targets are only
-revealed in the player's current room. This applies even through open doorways,
-after exploration, and when exterior walls/roofs are cut away. Actors, health
-bars, interaction markers and interaction prompts cannot disclose other rooms.
-`BuildingFloor` masks foreign-room floors with an opaque neutral material and
-hides static interior contents such as stairs. The active stair remains visible
-during traversal. The current demo assigns one room per building floor; future
-room layouts must give their tiles and registered static parts distinct IDs.
+512×64 合成场景包含 896 段墙和 896 棵树，索引 128 个地块。以每帧 0.9 单位的高于普通移动速度横穿场景，流送更新 p50 约 0.011 毫秒、p95 约 2.078 毫秒、最大约 2.405 毫秒；观测到最多 75 个驻留块，每帧最多完成 1 块。相同场景拆分构建前，流送 p95 曾达约 11.456 毫秒。测量受设备、场景密度和后台负载影响。
 
-On FOV revision, the view intersects the actual wall-clipped visibility polygon
-with allowed floor tiles and caches small content volumes. Unseen rooms never
-produce targets. Building cutaway checks these volumes as well as the player's
-body; turning the player can therefore change wall visibility without movement.
-This does not extend gameplay LOS through hidden walls. Volume bounds are
-conservative, with wall-contact insets and plane checks to preserve rear walls.
-
-`EXTERIOR_FULL` is the default when a building does not obstruct the player or
-currently visible content.
-`OcclusionZone` tests the entire player envelope swept toward the orthographic
-camera against cached bounds. The conservative expanded-box intersection catches
-head/feet/edge occlusion rather than sampling a single center ray. Blocked exterior
-buildings enter `EXTERIOR_CUTAWAY`: roof and floors above the displayed player floor
-are hidden; remaining wall/stair/slab parts are cut only where they intersect the
-view corridor. Other ground-floor parts remain opaque and visible. Neighboring
-buildings can also cut away while the player is indoors. Zones emit
-`occlusion_changed` on transitions; losing overlap, turning the camera or moving
-away restores the original geometry. Entering a blocked building gives interior
-rules priority. Zoom and camera-height changes refresh the context as well.
-
-`SmallOccluder` is separate from building slicing. Register a prop's static meshes
-with `register_mesh`, then register its `OcclusionZone` with the view's spatial
-index. StandardMaterial3D base color/texture are supported. During occlusion a
-dedicated opaque/discard shader dithers only an ellipse around the projected
-player body; the rest of the prop stays opaque. Materials and shadow settings
-restore when occlusion ends. Custom shader materials need a purpose-built adapter.
-The demo road sign at (7.3, 7.0) and tree at (0.9, 7.5) are render-only placeholders
-for this effect and do not add simulation collision. Prop bounds are registered
-once; moving/destroying props or streamed buildings need index lifecycle support
-before use. Procedural mesh cutting, arbitrary camera pitch/perspective and
-animated occluders remain outside this fixed-pitch orthographic implementation.
-
-Run `res://tests/mvp_smoke_test.tscn` for outside/entry, roof and floor slicing,
-front/back walls at corners and after orbit, stair midpoint, NPC isolation,
-exterior corridor cutaway, prop material restoration, spatial filtering, room
-privacy through doorways and off-body visible-content wall occlusion checks,
-plus existing combat, inventory, navigation and save regressions.
+现有覆盖还包括：超出旧视野距离的角色和容器、上层实体保留、长墙／屋顶跨块、边界墙唯一归属、合并装饰物后地面三角形完整、半成品不显示、构建续接、请求取消、缓存上限、静止及转身复用，以及渲染回收不改变模拟地图。

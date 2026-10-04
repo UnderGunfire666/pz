@@ -89,8 +89,14 @@ static func _test_editor_workflow(check: Callable) -> void:
 	OPS.wall(map, Vector2(2, 2), Vector2(8, 2), 0, "wall", house_id)
 	var doorway := OPS.wall(map, Vector2(3, 2), Vector2(4, 2), 0, "door", house_id)
 	check.call(not doorway.get("conflicts", []).is_empty(), "replacing wall with door reports a confirmation conflict")
+	var window := OPS.wall(map, Vector2(4, 2), Vector2(5, 2), 0, "window", house_id)
+	check.call(not window.get("conflicts", []).is_empty(), "replacing wall with window reports a confirmation conflict")
 	var house: MapBuildingInstanceDefinition = map.buildings[0]
-	check.call(house.template.wall_edges.size() == 6, "door replacement preserves all five neighbouring unit wall segments")
+	check.call(house.template.wall_edges.size() == 6
+		and house.template.wall_edges.filter(func(edge: MapWallEdgeDefinition) -> bool: return edge.kind == "wall").size() == 4
+		and house.template.wall_edges.filter(func(edge: MapWallEdgeDefinition) -> bool: return edge.kind == "door").size() == 1
+		and house.template.wall_edges.filter(func(edge: MapWallEdgeDefinition) -> bool: return edge.kind == "window").size() == 1,
+		"door and window replacement preserve neighbouring wall segments")
 	var stair := OPS.place_stair(map, Vector2(3.5, 4.5), Vector2.RIGHT, 0, house_id)
 	check.call(not stair.has("error"), "straight stairs accept supported endpoints on adjacent floors")
 	var world := OPS.adapter(map)
@@ -100,8 +106,28 @@ static func _test_editor_workflow(check: Callable) -> void:
 	check.call(ascent.floor == 1 and ascent.position.distance_to(Vector2(7.0, 4.5)) < 0.1,
 		"editor-authored stairs support continuous movement onto the upper landing")
 	check.call(not world.has_line_of_sight(Vector2(2.5, 1.5), Vector2(2.5, 2.5), 0)
-		and world.has_line_of_sight(Vector2(3.5, 1.5), Vector2(3.5, 2.5), 0),
-		"static door replaces the blocking wall without removing neighbouring wall occlusion")
+		and not world.has_line_of_sight(Vector2(3.5, 1.5), Vector2(3.5, 2.5), 0)
+		and not world.has_line_of_sight(Vector2(4.5, 1.5), Vector2(4.5, 2.5), 0),
+		"closed doors and windows block LOS alongside neighbouring walls")
+	var door_id := ""
+	var window_id := ""
+	for barrier_id: String in world.barriers:
+		if world.barriers[barrier_id]["kind"] == "door": door_id = barrier_id
+		if world.barriers[barrier_id]["kind"] == "window": window_id = barrier_id
+	world._build_navigation()
+	var navigation_nodes_before_toggle := world._nav_grid_ids.size()
+	check.call(not door_id.is_empty() and not window_id.is_empty()
+		and world.set_barrier_open(door_id, true)
+		and world.has_line_of_sight(Vector2(3.5, 1.5), Vector2(3.5, 2.5), 0)
+		and world.move_with_wall_slide(Vector2(3.5, 1.5), Vector2(0, 1), 0.22, 0).y > 2.0
+		and world.set_barrier_open(window_id, true)
+		and world.has_line_of_sight(Vector2(4.5, 1.5), Vector2(4.5, 2.5), 0)
+		and world.set_barrier_open(door_id, false)
+		and not world.has_line_of_sight(Vector2(3.5, 1.5), Vector2(3.5, 2.5), 0),
+		"opening barriers updates traversal and LOS; closing restores them")
+	check.call(world._last_barrier_navigation_grid_entries_scanned > 0
+		and world._last_barrier_navigation_grid_entries_scanned < navigation_nodes_before_toggle,
+		"barrier state changes rebuild only the local navigation neighbourhood")
 	world.free()
 	OPS.paint_heat(map, Rect2i(3, 3, 1, 1), 1, 0.8)
 	world = OPS.adapter(map)
@@ -151,12 +177,14 @@ static func _test_editor_workflow(check: Callable) -> void:
 	world.free()
 	var cropped := OPS.resize(clone, Vector2i(5, 5))
 	check.call(cropped.shrink and not cropped.conflicts.is_empty() and clone.buildings.is_empty(), "shrink proposal reports complete houses removed by crop")
-	check.call(ResourceSaver.save(map, "user://map_authoring_roundtrip.tres") == OK, "native authored map can be saved")
-	var loaded := ResourceLoader.load("user://map_authoring_roundtrip.tres", "", ResourceLoader.CACHE_MODE_IGNORE) as MapDefinition
+	var roundtrip_path := OS.get_temp_dir().path_join("pz-map-%d.tres" % Time.get_ticks_usec())
+	check.call(ResourceSaver.save(map, roundtrip_path) == OK, "native authored map can be saved")
+	var loaded := ResourceLoader.load(roundtrip_path, "", ResourceLoader.CACHE_MODE_IGNORE) as MapDefinition
 	check.call(loaded != null and loaded.buildings[0].template.stairs.size() == 1, "native map reload preserves template stair and floor data")
 	world = OPS.adapter(loaded)
 	check.call(world.get_tile_at(Vector2i(4, 4), 1) == null, "reloaded stairs preserve their upper-floor opening")
 	world.free()
+	DirAccess.remove_absolute(roundtrip_path)
 	var detached := OPS.snapshot(map)
 	detached.buildings[0].template.indoor_floors[0].zombie_pressure = 0.99
 	check.call(not is_equal_approx(map.buildings[0].template.indoor_floors[0].zombie_pressure, 0.99), "editing a copied house does not mutate the source")

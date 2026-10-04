@@ -9,6 +9,11 @@ var relationships: Dictionary = {}
 var memories: Array[String] = []
 var last_noise_position := Vector2.ZERO
 var last_noise_floor := 0
+var last_noise_time := -1.0
+var last_noise_strength := 0.0
+var last_noise_danger := false
+var noise_memory_until := 0.0
+var noise_lock_until := 0.0
 
 
 func choose_goal(
@@ -27,8 +32,6 @@ func choose_goal(
 		return Goal.SCAVENGE
 	if survival.fatigue < 65.0:
 		return Goal.REST
-	if not last_noise_position.is_zero_approx() and self_position.distance_to(last_noise_position) < 2.0:
-		return Goal.WANDER
 	return Goal.REST
 
 
@@ -68,6 +71,11 @@ func to_save_data() -> Dictionary:
 		"memories": memories.duplicate(),
 		"last_noise_position": last_noise_position,
 		"last_noise_floor": last_noise_floor,
+		"last_noise_time": last_noise_time,
+		"last_noise_strength": last_noise_strength,
+		"last_noise_danger": last_noise_danger,
+		"noise_memory_until": noise_memory_until,
+		"noise_lock_until": noise_lock_until,
 		"current_goal": int(current_goal),
 	}
 
@@ -78,4 +86,9 @@ func load_save_data(data: Dictionary) -> void:
 	memories = data.get("memories", []).duplicate()
 	last_noise_position = data.get("last_noise_position", Vector2.ZERO)
 	last_noise_floor = int(data.get("last_noise_floor", 0))
+	last_noise_time = float(data.get("last_noise_time", -1.0))
+	last_noise_strength = float(data.get("last_noise_strength", 0.0))
+	last_noise_danger = bool(data.get("last_noise_danger", false))
+	noise_memory_until = float(data.get("noise_memory_until", 0.0))
+	noise_lock_until = float(data.get("noise_lock_until", 0.0))
 	current_goal = int(data.get("current_goal", Goal.REST)) as Goal

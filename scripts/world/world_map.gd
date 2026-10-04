@@ -1,6 +1,7 @@
 class_name WorldMap
 extends Node
 
+signal barrier_changed(barrier_id: String, is_open: bool)
 ## Simulation authority: sparse floor support, wall faces, stairs and navigation.
 const WIDTH := 64 # Legacy compatibility; use width for authored maps.
 const HEIGHT := 64 # Legacy compatibility; use height for authored maps.
@@ -23,6 +24,7 @@ var floor_height := FLOOR_HEIGHT
 var floors: Dictionary = {}
 var buildings: Dictionary = {}
 var stairs: Dictionary = {}
+var barriers: Dictionary = {}
 var revision := 0
 var _navigation := AStar3D.new()
 var _nav_points: Dictionary = {}
@@ -32,6 +34,7 @@ var _stair_nav_ids: Dictionary = {}
 var _stair_node_pairs: Array[Vector2i] = []
 var _last_navigation_grid_entries_scanned := 0
 var _last_nearest_nav_candidates := 0
+var _last_barrier_navigation_grid_entries_scanned := 0
 var _zombie_areas := ZombieAreaCatalog.new()
 var _wall_index := SPATIAL_QUERY_INDEX.new()
 var _stair_index := SPATIAL_QUERY_INDEX.new()
@@ -51,6 +54,7 @@ func load_definition(value: MapDefinition, build_navigation: bool = true) -> voi
 	floors.clear()
 	buildings.clear()
 	stairs.clear()
+	barriers.clear()
 	_spatial_index_ready = false
 	for cell: MapCellDefinition in definition.cells:
 		width = max(width, cell.cell_coordinate.x * cell.size.x + cell.size.x)
@@ -79,8 +83,7 @@ func load_definition(value: MapDefinition, build_navigation: bool = true) -> voi
 		_make_building(building)
 	for edge: MapWallEdgeDefinition in definition.wall_edges:
 		if edge.kind != "wall":
-			if not floors.has(edge.level): floors[edge.level] = FloorData.new(edge.level)
-			floors[edge.level].visual_edges.append({"start": edge.start, "end": edge.end, "building_id": edge.building_id, "kind": edge.kind})
+			_register_barrier(edge.id, edge.start, edge.end, edge.level, edge.building_id, edge.kind, edge.initially_open)
 		if edge.kind == "wall" and not edge.initially_open and edge.initially_intact:
 			if not floors.has(edge.level): floors[edge.level] = FloorData.new(edge.level)
 			_add_wall(edge.start, edge.end, edge.building_id, edge.level)
@@ -265,16 +268,24 @@ func _make_building(source: MapBuildingInstanceDefinition) -> void:
 					floor_data.tiles[cell] = WorldTileData.new("floor", true, source.zombie_pressure, source.id,
 						room.id if room != null else "%s_%d" % [source.id, level], source.safehouse, level,
 						base_kind, base_walkable, "floor", "building", source.id)
-					if not edge or is_door:
+					if is_door:
+						_register_legacy_door(source.id, cell, bounds, level)
 						continue
+					if not edge:
+						continue
+					# A wall owns the boundary between grid cells.  The old prototype
+					# placed each perimeter side 0.18/0.82 cells inward, which made
+					# adjoining sides cross at corners and exposed an indoor floor strip
+					# outside the building.  Keep collision, sight and rendering on the
+					# same canonical grid edge.
 					if y == bounds.position.y:
-						_add_wall(Vector2(x, y + 0.18), Vector2(x + 1, y + 0.18), source.id, level)
+						_add_wall(Vector2(x, bounds.position.y), Vector2(x + 1, bounds.position.y), source.id, level)
 					if y == bounds.end.y - 1:
-						_add_wall(Vector2(x, y + 0.82), Vector2(x + 1, y + 0.82), source.id, level)
+						_add_wall(Vector2(x, bounds.end.y), Vector2(x + 1, bounds.end.y), source.id, level)
 					if x == bounds.position.x:
-						_add_wall(Vector2(x + 0.18, y), Vector2(x + 0.18, y + 1), source.id, level)
+						_add_wall(Vector2(bounds.position.x, y), Vector2(bounds.position.x, y + 1), source.id, level)
 					if x == bounds.end.x - 1:
-						_add_wall(Vector2(x + 0.82, y), Vector2(x + 0.82, y + 1), source.id, level)
+						_add_wall(Vector2(bounds.end.x, y), Vector2(bounds.end.x, y + 1), source.id, level)
 		_add_template_walls(source, level)
 	if source.template != null:
 		for local_stair: MapStairDefinition in source.template.stairs:
@@ -287,6 +298,24 @@ func _make_building(source: MapBuildingInstanceDefinition) -> void:
 			_add_stair(authored)
 
 
+func _register_legacy_door(building_id: String, cell: Vector2i, bounds: Rect2i, level: int) -> void:
+	## Version-one building instances stored only a perimeter tile opening. Convert
+	## that opening into an initially-open barrier so old authored maps gain door
+	## interaction without changing their default traversal state.
+	var start := Vector2(cell)
+	var end := start + Vector2.RIGHT
+	if cell.y == bounds.position.y:
+		end = start + Vector2.RIGHT
+	elif cell.y == bounds.end.y - 1:
+		start.y = bounds.end.y; end = start + Vector2.RIGHT
+	elif cell.x == bounds.position.x:
+		end = start + Vector2.DOWN
+	else:
+		start.x = bounds.end.x; end = start + Vector2.DOWN
+	_register_barrier("%s:legacy_door_%d" % [building_id, level], start, end, level,
+		building_id, "door", true)
+
+
 func _add_template_walls(source: MapBuildingInstanceDefinition, level: int) -> void:
 	if source.template == null:
 		return
@@ -296,7 +325,8 @@ func _add_template_walls(source: MapBuildingInstanceDefinition, level: int) -> v
 		# Template edges are local-space, so a reusable building remains portable.
 		var origin := Vector2(source.origin)
 		if edge.kind != "wall":
-			floors[level].visual_edges.append({"start": origin + edge.start, "end": origin + edge.end, "building_id": source.id, "kind": edge.kind})
+			_register_barrier("%s:%s" % [source.id, edge.id], origin + edge.start, origin + edge.end,
+				level, source.id, edge.kind, edge.initially_open)
 		elif not edge.initially_open:
 			_add_wall(origin + edge.start, origin + edge.end, source.id, level)
 
@@ -327,9 +357,106 @@ func _room_for_cell(rooms: Array[RoomData], cell: Vector2i, level: int) -> RoomD
 	return null
 
 
-func _add_wall(start: Vector2, end: Vector2, building: String, level: int) -> void:
-	floors[level].wall_faces.append({"start": start, "end": end, "building_id": building})
+func _add_wall(start: Vector2, end: Vector2, building: String, level: int, extra: Dictionary = {}) -> void:
+	var face := {"start": start, "end": end, "building_id": building}
+	face.merge(extra)
+	floors[level].wall_faces.append(face)
 	_spatial_index_ready = false
+
+
+func _register_barrier(id: String, start: Vector2, end: Vector2, level: int, building_id: String,
+		kind: String, is_open: bool) -> void:
+	if id.is_empty() or kind not in ["door", "window"]:
+		return
+	if not floors.has(level): floors[level] = FloorData.new(level)
+	barriers[id] = {"id": id, "start": start, "end": end, "level": level,
+		"building_id": building_id, "kind": kind, "open": is_open}
+	(floors[level] as FloorData).visual_edges.append({"start": start, "end": end,
+		"building_id": building_id, "kind": kind, "barrier_id": id})
+	if not is_open:
+		_add_wall(start, end, building_id, level, {"barrier_id": id, "render": false})
+
+
+func nearest_barrier(position: Vector2, level: int, radius: float = 1.0) -> Dictionary:
+	var nearest: Dictionary = {}
+	var shortest := radius
+	for barrier: Dictionary in barriers.values():
+		if int(barrier["level"]) != level:
+			continue
+		var distance := position.distance_to(Geometry2D.get_closest_point_to_segment(position, barrier["start"], barrier["end"]))
+		if distance < shortest:
+			nearest = barrier
+			shortest = distance
+	return nearest
+
+
+func set_barrier_open(id: String, is_open: bool) -> bool:
+	if not barriers.has(id) or bool(barriers[id]["open"]) == is_open:
+		return false
+	var barrier: Dictionary = barriers[id]
+	barrier["open"] = is_open
+	barriers[id] = barrier
+	var data: FloorData = floors[int(barrier["level"])]
+	data.wall_faces = data.wall_faces.filter(func(face: Dictionary) -> bool: return face.get("barrier_id", "") != id)
+	if not is_open:
+		_add_wall(barrier["start"], barrier["end"], barrier["building_id"], int(barrier["level"]), {"barrier_id": id, "render": false})
+	rebuild_spatial_index()
+	_refresh_navigation_near_barrier(barrier)
+	revision += 1
+	barrier_changed.emit(id, is_open)
+	return true
+
+
+func barrier_save_data() -> Dictionary:
+	var result := {}
+	for id: String in barriers:
+		result[id] = bool(barriers[id]["open"])
+	return result
+
+
+func is_barrier_open(id: String) -> bool:
+	return barriers.has(id) and bool(barriers[id]["open"])
+
+
+func resolve_closed_barrier_overlap(id: String, position: Vector2, level: int,
+		preferred_side: Vector2 = Vector2.ZERO) -> Vector2:
+	## Closing a barrier is a state change, not a physics push. Resolve an actor
+	## already standing in its opening to a valid side before its next movement
+	## sample, otherwise every wall-slide attempt is rejected and it is stuck.
+	if not barriers.has(id) or is_barrier_open(id):
+		return position
+	var barrier: Dictionary = barriers[id]
+	if int(barrier["level"]) != level:
+		return position
+	var start: Vector2 = barrier["start"]
+	var end: Vector2 = barrier["end"]
+	var closest := Geometry2D.get_closest_point_to_segment(position, start, end)
+	if position.distance_to(closest) >= ACTOR_RADIUS:
+		return position
+	var edge := (end - start).normalized()
+	if edge.length_squared() < 0.001:
+		return position
+	var normal := Vector2(-edge.y, edge.x)
+	var side := signf((position - closest).dot(normal))
+	if is_zero_approx(side):
+		# At the exact door line, preserve the side the actor approached from.
+		# Interacting normally faces the barrier, so stepping opposite that facing
+		# direction is the safe, unsurprising side rather than an arbitrary room.
+		side = signf(preferred_side.dot(normal))
+	if is_zero_approx(side): side = 1.0
+	for distance in [ACTOR_RADIUS + 0.04, ACTOR_RADIUS + 0.12, ACTOR_RADIUS + 0.24]:
+		for side_sign in [side, -side]:
+			for along in [0.0, -0.14, 0.14]:
+				var candidate: Vector2 = closest + normal * distance * side_sign + edge * along
+				if _valid_position(candidate, level):
+					return candidate
+	return position
+
+
+func restore_barrier_states(states: Dictionary) -> void:
+	for id: String in states:
+		if barriers.has(id) and states[id] is bool:
+			set_barrier_open(id, states[id])
 
 
 func _add_stair(source: MapStairDefinition) -> void:
@@ -504,6 +631,66 @@ func has_line_of_sight(from: Vector2, to: Vector2, level: int = 0, to_floor: int
 	return true
 
 
+func has_spatial_line_of_sight(from: Vector3, to: Vector3) -> bool:
+	# Query authoritative world geometry even when its render chunk is absent.
+	var a := Vector2(from.x, from.z)
+	var b := Vector2(to.x, to.z)
+	var bounds := Rect2(a, Vector2.ZERO).expand(b).grow(0.06)
+	var delta := to - from
+	var checked_stairs: Dictionary = {}
+	for level: int in floors:
+		var base := level * floor_height
+		if maxf(from.y, to.y) < base or minf(from.y, to.y) > base + floor_height: continue
+		for face: Dictionary in query_walls(level, bounds):
+			if _sight_hits_box(from, to, face["start"], face["end"], base, floor_height, 0.12): return false
+		# Floors are planes with exactly the same stair cutout as the renderer.
+		if absf(delta.y) > 0.000001:
+			var t := (base - from.y) / delta.y
+			if t > 0.00001 and t < 0.99999:
+				var crossing := a.lerp(b, t)
+				if get_tile(crossing, level) != null and not _sight_floor_opening(crossing, level): return false
+		for link: StairLink in query_stairs(level, bounds):
+			if checked_stairs.has(link.id): continue
+			checked_stairs[link.id] = true
+			var rise := (link.to_floor - link.from_floor) * floor_height
+			var steps := maxi(maxi(8, ceili(rise / 0.22)), ceili(link.length()))
+			for index in steps:
+				var middle := (float(index) + 0.5) / steps
+				var center := link.start.lerp(link.end, middle)
+				var half := link.direction() * (link.length() / steps + 0.02) * 0.5
+				if _sight_hits_box(from, to, center - half, center + half,
+					link.from_floor * floor_height + rise * middle - 0.09, 0.09, link.width): return false
+	for building: BuildingData in buildings.values():
+		if not building.has_roof: continue
+		var roof := Rect2(building.bounds).grow(0.06)
+		if not bounds.intersects(roof, true): continue
+		var center := roof.get_center()
+		if _sight_hits_box(from, to, Vector2(roof.position.x, center.y), Vector2(roof.end.x, center.y),
+			building.floor_count * floor_height - 0.04, 0.16, roof.size.y): return false
+	return true
+
+
+func _sight_floor_opening(position: Vector2, level: int) -> bool:
+	for link: StairLink in query_stairs(level, Rect2(position, Vector2.ZERO)):
+		if link.to_floor != level: continue
+		var offset := position - link.start
+		var along := offset.dot(link.direction())
+		if along >= 0.15 and along <= link.length() - 0.28 and absf(offset.cross(link.direction())) <= link.width * 0.5: return true
+	return false
+
+
+static func _sight_hits_box(from: Vector3, to: Vector3, start: Vector2, end: Vector2,
+		base: float, height: float, thickness: float) -> bool:
+	var direction := start.direction_to(end)
+	var side := Vector2(-direction.y, direction.x)
+	var a := Vector2(from.x, from.z) - start
+	var b := Vector2(to.x, to.z) - start
+	var local_from := Vector3(a.dot(direction), from.y - base, a.dot(side))
+	var local_to := Vector3(b.dot(direction), to.y - base, b.dot(side))
+	return AABB(Vector3(0.0, 0.0, -thickness * 0.5),
+		Vector3(start.distance_to(end), height, thickness)).intersects_segment(local_from, local_to) != null
+
+
 func pressure_at(pos: Vector2, level: int = 0) -> float:
 	var tile := get_tile(pos, level)
 	return tile.zombie_pressure if tile != null else 0.0
@@ -584,13 +771,61 @@ func _segment_walkable(from: Vector2, to: Vector2, level: int) -> bool:
 
 
 func _add_nav_point(pos: Vector2, level: int) -> int:
-	var id := _navigation.get_point_count()
+	var id := _navigation.get_available_point_id()
 	_navigation.add_point(id, Vector3(pos.x, level * floor_height, pos.y))
 	_nav_points[id] = {"position": pos, "floor": level}
 	var ids: Array = _floor_node_ids.get(level, [])
 	ids.append(id)
 	_floor_node_ids[level] = ids
 	return id
+
+
+func _refresh_navigation_near_barrier(barrier: Dictionary) -> void:
+	## A barrier only changes local clearance. Rebuilding the entire A* graph here
+	## produced the visible hitch when doors or windows were toggled.
+	if _nav_grid_ids.is_empty():
+		_last_barrier_navigation_grid_entries_scanned = 0
+		return
+	var level := int(barrier["level"])
+	var bounds := Rect2(barrier["start"], Vector2.ZERO).expand(barrier["end"]).grow(ACTOR_RADIUS + NAV_GRID_STEP)
+	var min_x := maxi(0, int(floor(bounds.position.x / NAV_GRID_STEP - 0.5)))
+	var min_y := maxi(0, int(floor(bounds.position.y / NAV_GRID_STEP - 0.5)))
+	var max_x := mini(int(ceil(float(width) / NAV_GRID_STEP)) - 1, int(ceil(bounds.end.x / NAV_GRID_STEP - 0.5)))
+	var max_y := mini(int(ceil(float(height) / NAV_GRID_STEP)) - 1, int(ceil(bounds.end.y / NAV_GRID_STEP - 0.5)))
+	var keys: Array[Vector3i] = []
+	for y in range(min_y, max_y + 1):
+		for x in range(min_x, max_x + 1):
+			keys.append(Vector3i(x, y, level))
+	_last_barrier_navigation_grid_entries_scanned = keys.size()
+	var floor_ids: Array = _floor_node_ids.get(level, [])
+	for key in keys:
+		if not _nav_grid_ids.has(key): continue
+		var id := int(_nav_grid_ids[key])
+		_navigation.remove_point(id)
+		_nav_points.erase(id)
+		floor_ids.erase(id)
+		_nav_grid_ids.erase(key)
+	_floor_node_ids[level] = floor_ids
+	for key in keys:
+		var pos := Vector2((float(key.x) + 0.5) * NAV_GRID_STEP, (float(key.y) + 0.5) * NAV_GRID_STEP)
+		if _valid_position(pos, level): _nav_grid_ids[key] = _add_nav_point(pos, level)
+	for key in keys:
+		if not _nav_grid_ids.has(key): continue
+		var from_id := int(_nav_grid_ids[key])
+		var from: Vector2 = _nav_points[from_id]["position"]
+		for offset in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN,
+			Vector2i(-1, -1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 1)]:
+			var neighbour_key := Vector3i(key.x + offset.x, key.y + offset.y, level)
+			if not _nav_grid_ids.has(neighbour_key): continue
+			var to_id := int(_nav_grid_ids[neighbour_key])
+			var to: Vector2 = _nav_points[to_id]["position"]
+			if _nav_grid_neighbours_connect(from, to, level): _navigation.connect_points(from_id, to_id)
+	var stair_values: Array = stairs.values()
+	for index in range(mini(stair_values.size(), _stair_node_pairs.size())):
+		var link: StairLink = stair_values[index]
+		var pair := _stair_node_pairs[index]
+		if link.from_floor == level: _connect_stair_landing(pair.x, link.start, level)
+		if link.to_floor == level: _connect_stair_landing(pair.y, link.end, level)
 
 
 func _build_navigation() -> void:
@@ -703,28 +938,130 @@ func find_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> Ar
 	for id in path:
 		result.append(_nav_points[id].duplicate())
 	result.append({"position": to, "floor": to_floor})
-	return result
+	# Keep both ends of every vertical edge. Shortcuts must prove continuous
+	# support and actor-radius clearance, not just visibility of the destination.
+	for index in range(result.size() - 1):
+		if result[index]["floor"] != result[index + 1]["floor"]:
+			result[index]["landing"] = true
+			result[index + 1]["landing"] = true
+	var simplified: Array[Dictionary] = []
+	var cursor := from
+	var level := from_floor
+	var index := 0
+	while index < result.size():
+		var chosen := index
+		if int(result[index]["floor"]) == level and not result[index].get("landing", false):
+			for candidate in range(index + 1, mini(index + 12, result.size())):
+				if int(result[candidate]["floor"]) != level: break
+				if _segment_walkable(cursor, result[candidate]["position"], level): chosen = candidate
+				if result[candidate].get("landing", false): break
+		simplified.append(result[chosen])
+		cursor = result[chosen]["position"]
+		level = int(result[chosen]["floor"])
+		index = chosen + 1
+	return simplified
+
+
+func find_path_to_stair(from: Vector2, from_floor: int, target: Vector2, target_stair: String) -> Array[Dictionary]:
+	var best: Array[Dictionary] = []
+	var link: StairLink = stairs.get(target_stair)
+	if link == null: return best
+	var best_cost := INF
+	for entry: Dictionary in [{"position": link.start, "floor": link.from_floor},
+		{"position": link.end, "floor": link.to_floor}]:
+		var path := find_path(from, from_floor, entry["position"], int(entry["floor"]))
+		if path.is_empty(): continue
+		var previous := Vector3(from.x, from_floor * floor_height, from.y)
+		var cost := 0.0
+		for waypoint: Dictionary in path:
+			var pos: Vector2 = waypoint["position"]
+			var next := Vector3(pos.x, int(waypoint["floor"]) * floor_height, pos.y)
+			cost += previous.distance_to(next)
+			previous = next
+		cost += previous.distance_to(Vector3(target.x, elevation_at(target, int(entry["floor"]), target_stair), target.y))
+		if cost >= best_cost: continue
+		best_cost = cost
+		best = path
+		best.back()["landing"] = true
+		best.append({"position": target, "floor": int(entry["floor"]), "stair": target_stair})
+	return best
 
 
 func sound_cost(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> float:
-	if get_tile(from, from_floor) == null or get_tile(to, to_floor) == null:
-		return INF
-	if from_floor == to_floor:
-		var cost := from.distance_to(to)
-		for face in query_walls(from_floor, Rect2(from, Vector2.ZERO).expand(to)):
-			if Geometry2D.segment_intersects_segment(from, to, face["start"], face["end"]) != null:
-				cost += 2.5
-		return cost
-	# Stair mouths carry sound vertically. No broadcast to disconnected buildings.
-	var best := INF
-	for link: StairLink in stairs_on_floor(from_floor):
-		if from_floor != link.from_floor and from_floor != link.to_floor:
-			continue
-		var next_floor := link.to_floor if from_floor == link.from_floor else link.from_floor
-		if absi(next_floor - to_floor) >= absi(from_floor - to_floor):
-			continue
-		var entry := link.start if from_floor == link.from_floor else link.end
-		var exit := link.end if from_floor == link.from_floor else link.start
-		var access := from.distance_to(entry) + (0.0 if has_line_of_sight(from, entry, from_floor) else 2.5)
-		best = minf(best, access + 2.0 + link.length() * 0.35 + sound_cost(exit, next_floor, to, to_floor))
-	return best
+	# Compatibility entry point; all callers share the spatial propagation rules.
+	return float(trace_sound(ActorPerception.point(self, from, from_floor, "", ActorPerception.CHEST_HEIGHT),
+		ActorPerception.point(self, to, to_floor, "", ActorPerception.CHEST_HEIGHT))["cost"])
+
+
+func trace_sound(from: Vector3, to: Vector3, max_cost: float = INF) -> Dictionary:
+	# Distance plus material loss in world-distance units, not decibels. Bounded
+	# direct transmission; no recursive stair search or AStar per listener.
+	var distance := from.distance_to(to)
+	var obstacles := {"wall": 0, "door": 0, "window": 0, "floor": 0, "roof": 0, "stairs": 0}
+	var loss := 0.0
+	var a := Vector2(from.x, from.z)
+	var b := Vector2(to.x, to.z)
+	var bounds := Rect2(a, Vector2.ZERO).expand(b).grow(0.06)
+	var delta := to - from
+	var checked_stairs: Dictionary = {}
+	var wall_crossings: Dictionary = {}
+	# Slab checks are cheap and often reject cross-floor sounds before wall scans.
+	for level: int in floors:
+		var base := level * floor_height
+		if absf(delta.y) > 0.000001:
+			var t := (base - from.y) / delta.y
+			if t > 0.00001 and t < 0.99999:
+				var crossing := a.lerp(b, t)
+				if get_tile(crossing, level) != null and not _sight_floor_opening(crossing, level):
+					obstacles["floor"] += 1
+					loss += 6.0
+		if distance + loss >= max_cost:
+			return {"distance": distance, "obstacle_loss": loss, "cost": distance + loss, "obstacles": obstacles}
+	for level: int in floors:
+		var base := level * floor_height
+		if maxf(from.y, to.y) < base or minf(from.y, to.y) > base + floor_height: continue
+		for face: Dictionary in query_walls(level, bounds):
+			if not Rect2(face["start"], Vector2.ZERO).expand(face["end"]).grow(0.06).intersects(bounds, true): continue
+			if not _sight_hits_box(from, to, face["start"], face["end"], base, floor_height, 0.12): continue
+			var kind := "wall"
+			var barrier_id := String(face.get("barrier_id", ""))
+			if barriers.has(barrier_id): kind = String(barriers[barrier_id]["kind"])
+			var penalty := 2.5 if kind == "wall" else (1.6 if kind == "door" else 0.8)
+			# Joined wall segments hit at one seam must not double the loss.
+			var edge: Vector2 = face["end"] - face["start"]
+			var denominator := (b - a).cross(edge)
+			var fraction := clampf((Vector2(face["start"]) - a).cross(edge) / denominator, 0.0, 1.0) if absf(denominator) > 0.000001 else 0.0
+			var key := (from.lerp(to, fraction) * 1000.0).round()
+			if not wall_crossings.has(key) or penalty > float(wall_crossings[key]["loss"]):
+				if wall_crossings.has(key):
+					loss -= float(wall_crossings[key]["loss"])
+					obstacles[wall_crossings[key]["kind"]] -= 1
+				wall_crossings[key] = {"kind": kind, "loss": penalty}
+				loss += penalty
+				obstacles[kind] += 1
+			if distance + loss >= max_cost:
+				return {"distance": distance, "obstacle_loss": loss, "cost": distance + loss, "obstacles": obstacles}
+		for link: StairLink in query_stairs(level, bounds):
+			if checked_stairs.has(link.id): continue
+			checked_stairs[link.id] = true
+			var rise := (link.to_floor - link.from_floor) * floor_height
+			var steps := maxi(maxi(8, ceili(rise / 0.22)), ceili(link.length()))
+			for index in steps:
+				var middle := (float(index) + 0.5) / steps
+				var center := link.start.lerp(link.end, middle)
+				var half := link.direction() * (link.length() / steps + 0.02) * 0.5
+				if _sight_hits_box(from, to, center - half, center + half,
+					link.from_floor * floor_height + rise * middle - 0.09, 0.09, link.width):
+					obstacles["stairs"] += 1
+					loss += 2.5
+					break # One staircase, not a separate penalty for every tread.
+	for building: BuildingData in buildings.values():
+		if not building.has_roof: continue
+		var roof := Rect2(building.bounds).grow(0.06)
+		if not bounds.intersects(roof, true): continue
+		var center := roof.get_center()
+		if _sight_hits_box(from, to, Vector2(roof.position.x, center.y), Vector2(roof.end.x, center.y),
+			building.floor_count * floor_height - 0.04, 0.16, roof.size.y):
+			obstacles["roof"] += 1
+			loss += 5.0
+	return {"distance": distance, "obstacle_loss": loss, "cost": distance + loss, "obstacles": obstacles}

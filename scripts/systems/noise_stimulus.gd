@@ -7,6 +7,12 @@ var audible_range: float
 var floor_level: int
 var event_type: String
 var world_time: float
+# Captured at emission, independent of the emitter's later movement or lifetime.
+# INF marks legacy planar events; the listener resolves their floor height.
+var spatial_position := Vector3.INF
+var source_stair_id := ""
+var emitter_instance_id := 0
+var map_instance_id := 0
 
 
 func _init(position := Vector2.ZERO, range := 0.0, type := "", floor := 0,

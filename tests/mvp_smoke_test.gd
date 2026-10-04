@@ -10,37 +10,9 @@ var checks := 0
 var game: MVPGameRoot
 
 
-func _test_visibility_cache_regressions() -> void:
-	var vis := game.visibility
-	var view := game.world_3d_view
-	var original_seen := vis.seen_tiles.duplicate()
-	var origin := vis.viewer_position
-	var direction := vis.facing_direction
-	var level := vis.viewer_floor
-	var first := Vector3i(50, 50, 0)
-	var second := Vector3i(51, 50, 0)
-	vis.restore_exploration({first: true})
-	view._update_fog()
-	vis.restore_exploration({second: true})
-	view._update_fog()
-	var memory: Image = view.fog_masks[0]["image"]
-	_expect(memory.get_pixel(600, 600).r == 0.0 and memory.get_pixel(612, 600).r == 1.0,
-		"equal-size exploration restore replaces old fog pixels")
-	vis.refresh(Vector2(4.5, 6.5), Vector2.DOWN, false, 0)
-	view._update_fog()
-	var mesh_before: Mesh = view.fog_overlays[0].mesh
-	vis.refresh(Vector2(4.5, 6.5), Vector2.UP, false, 1)
-	view._update_fog()
-	var mask: Image = view.fog_masks[0]["visibility_image"]
-	_expect(not bool(view.fog_masks[0]["had_visibility"]) and mask.get_pixel(54, 78).r == 0.0,
-		"floor change clears previous floor current-visibility mask")
-	_expect(view.fog_overlays[0].mesh == mesh_before, "FOV updates reuse the static fog mesh")
-	vis.restore_exploration(original_seen)
-	vis.refresh(origin, direction, false, level)
-	view._update_fog()
+func _test_simulation_activation() -> void:
 	var spawner := ZombieSpawner.new()
 	spawner.setup(game.world_map, game.actor_layer, game.player, game.player_state)
-	spawner.visibility_system = vis
 	var zombie := ZombieActor.new()
 	zombie.floor_level = game.player.floor_level
 	zombie.logical_position = game.player.logical_position
@@ -73,11 +45,12 @@ func _run() -> void:
 	_test_priority_fixes()
 	MAP_AUTHORING_TESTS.run(_expect)
 	SPATIAL_QUERY_TESTS.run(game, _expect)
+	preload("res://tests/hearing_tests.gd").run(game, _expect)
 	_test_world_and_stairs()
 	ZombiePressureTests.run(game, _expect)
-	_test_structure_occlusion()
-	_test_exterior_and_props()
-	_test_room_privacy_and_visible_contents()
+	FirstPersonTests.run(game, _expect)
+	WorldStreamingTests.run(game, _expect)
+	_test_barrier_rendering()
 	_test_visibility_and_combat()
 	_test_actions_and_inventory()
 	_test_npc_and_paths()
@@ -87,7 +60,7 @@ func _run() -> void:
 	PlayerStatusTests.run(game, _expect)
 	CharacterProgressionTests.run(game, _expect)
 	_test_save_and_pause()
-	_test_visibility_cache_regressions()
+	_test_simulation_activation()
 	game.world_3d_view._process(0.0)
 	game.hud.refresh(game)
 	if "--capture" in OS.get_cmdline_user_args() and DisplayServer.get_name() != "headless":
@@ -97,23 +70,19 @@ func _run() -> void:
 					game.inventory.move_unit(stack.units[0]["uid"], "outer_top")
 					break
 		_place_player(Vector2(17.5, 13.5), 0)
-		game.visibility.refresh(game.player.logical_position, Vector2.UP, false, 0)
-		game.world_3d_view.camera_distance = World3DView.CAMERA_DISTANCE_MIN
+		game.world_3d_view.sync_view_to_player()
 		game.player._attack_flash_left = 0.1
 		game.world_3d_view._update_camera(0.0)
 		game.world_3d_view._process(0.0)
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png("res://.godot/mvp-clothing.png")
 		game.player._attack_flash_left = 0.0
-		game.world_3d_view.camera_distance = 19.0
 		_place_player(Vector2(4.45, 6.65), 0)
-		game.visibility.refresh(game.player.logical_position, Vector2.UP, false, 0)
 		game.world_3d_view._process(0.0)
 		game.hud.refresh(game)
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png("res://.godot/mvp-ground.png")
 		_place_player(Vector2(14.5, 6.5), 2)
-		game.visibility.refresh(game.player.logical_position, Vector2.LEFT, false, 2)
 		game.world_3d_view._process(0.0)
 		game.hud.refresh(game)
 		await RenderingServer.frame_post_draw
@@ -124,7 +93,6 @@ func _run() -> void:
 			{"position": Vector2(6.3, 6.0), "name": "prop-dither"},
 		]:
 			_place_player(sample["position"], 0)
-			game.visibility.refresh(game.player.logical_position, Vector2.UP, false, 0)
 			game.world_3d_view._process(0.0)
 			game.hud.refresh(game)
 			await RenderingServer.frame_post_draw
@@ -186,22 +154,12 @@ func _test_priority_fixes() -> void:
 	floor_data.tiles.erase(Vector2i(1, 0))
 	_expect(not local_map._nav_neighbours_connect(Vector2(0.75, 0.75), Vector2(1.25, 1.25), 0),
 		"navigation rejects diagonal unsupported corner")
-	var view := World3DView.new()
-	view.world_map = local_map
-	add_child(view)
-	view._add_building_floor_batches(0)
-	_expect(view.structure_parts.size() == 2, "same-material rooms receive independent floor meshes")
-	var room_floor := BuildingFloor.new()
-	view.add_child(room_floor)
-	room_floor.viewer_room = "left"
-	for part in view.structure_parts:
-		var mesh := part["node"] as MeshInstance3D
-		var bounds := mesh.get_aabb()
-		_expect(bounds.size.x <= 1.0 and part["room"] in ["left", "right"], "room batch bounds do not include adjacent room")
-		room_floor.register_part(mesh, "floor", part["room"])
-		_expect(mesh.material_override != null,
-			"room floors retain an authored material for exploration-memory fog")
-	view.free()
+	var builder := WorldChunkBuilder.new()
+	local_map.definition = MapDefinition.new()
+	builder.setup(local_map)
+	var chunk := builder.build_chunk(Vector2i.ZERO)
+	_expect(chunk.get_child_count() == 1, "same-material room floors merge into one static render batch")
+	chunk.free()
 	local_map.free()
 	var zombie := ZombieActor.new()
 	zombie.setup(game.world_map, game.player, game.player_state, game.player.logical_position, game.player.floor_level)
@@ -232,218 +190,42 @@ func _disable_simulation(node: Node) -> void:
 		_disable_simulation(child)
 
 
-func _test_structure_occlusion() -> void:
+func _test_barrier_rendering() -> void:
+	var map := game.world_map
 	var view := game.world_3d_view
-	_place_player(Vector2(17.5, 13.5), 0)
-	view._update_structure_visibility()
-	_expect(_all_building_parts_visible(), "outside shows complete buildings")
-	var unsupported_roofs_hidden := true
-	for building: BuildingVisibilityController in view.building_controllers.values():
-		for roof in building.roofs:
-			if int(roof["support_floor"]) > view._stream_floor:
-				unsupported_roofs_hidden = unsupported_roofs_hidden and not (roof["node"] as Node3D).visible
-	_expect(unsupported_roofs_hidden, "exterior roofs stay hidden while supporting upper floors are not streamed")
-	_place_player(Vector2(14.5, 6.5), 0)
-	view._update_structure_visibility()
-	var controller: BuildingVisibilityController = view.building_controllers[view._active_building_id]
-	_expect(controller.state == BuildingVisibilityController.State.INTERIOR, "entry activates local interior cutaway")
-	_expect(not (controller.roofs[0]["node"] as Node3D).visible, "entry hides roof")
-	view._refresh_streamed_floor_chunks(true)
-	_expect(not (controller.roofs[0]["node"] as Node3D).visible,
-		"forced chunk refresh preserves interior roof cutaway")
-	_expect((controller.floors[0] as BuildingFloor).visible
-		and not (controller.floors[1] as BuildingFloor).visible
-		and not (controller.floors[2] as BuildingFloor).visible, "current floor visible and all upper floors sliced")
-	var front_faded := false
-	var back_visible := false
-	for wall: OccludableWall in (controller.floors[0] as BuildingFloor).walls:
-		front_faded = front_faded or wall.is_cutaway()
-		back_visible = back_visible or wall.mesh.visible
-	_expect(front_faded and back_visible, "front wall fades while back walls remain opaque")
-	# Near a corner, diagonal depth used to incorrectly hide distant rear segments.
-	_place_player(Vector2(11.5, 3.0), 0)
-	view._update_structure_visibility()
-	var rear_intact := true
-	for wall: OccludableWall in (controller.floors[0] as BuildingFloor).walls:
-		if is_equal_approx(wall.center.y, 2.18) or is_equal_approx(wall.center.x, 10.18):
-			rear_intact = rear_intact and wall.mesh.visible
-	_expect(rear_intact, "all rear wall segments survive near building corner")
-	view.camera_yaw += PI
-	view._update_structure_visibility()
-	var reversed := true
-	for wall: OccludableWall in (controller.floors[0] as BuildingFloor).walls:
-		if is_equal_approx(wall.center.y, 8.82) or is_equal_approx(wall.center.x, 16.82):
-			reversed = reversed and wall.mesh.visible
-	_expect(reversed, "camera orbit restores newly rear-facing walls")
-	view.camera_yaw -= PI
-	view._update_structure_visibility()
-	var previous_npc_position := game.npc.logical_position
-	game.npc.logical_position = Vector2(5.5, 3.5)
-	view._update_structure_visibility()
-	_expect(controller.state == BuildingVisibilityController.State.INTERIOR and controller.active_floor == 0,
-		"NPC movement cannot change local building visibility")
-	game.npc.logical_position = previous_npc_position
-	_place_player(Vector2(14.5, 6.5), 1)
-	view._update_structure_visibility()
-	_expect((controller.floors[1] as BuildingFloor).visible and not (controller.floors[2] as BuildingFloor).visible,
-		"floor change updates slice")
-	var link: StairLink = game.world_map.stairs["grocery_1_2"]
-	_place_player(link.start.lerp(link.end, 0.49), 1)
-	game.player.stair_id = link.id
-	view._update_structure_visibility()
-	_expect(not (controller.floors[2] as BuildingFloor).visible, "stair entry preserves lower slice")
-	game.player.logical_position = link.start.lerp(link.end, 0.51)
-	view._update_structure_visibility()
-	_expect((controller.floors[2] as BuildingFloor).visible, "stair midpoint reveals upper slice")
-	for index in range(8):
-		_place_player(Vector2(14.5, 6.5), index % 3)
-		view._update_structure_visibility()
-		_place_player(Vector2(17.5, 13.5), 0)
-		view._update_structure_visibility()
-	_expect(_all_building_parts_visible(), "rapid entry and exit restores every building part")
-	_expect(controller.state == BuildingVisibilityController.State.EXTERIOR_FULL, "exit restores full exterior state")
-
-
-func _test_exterior_and_props() -> void:
-	var view := game.world_3d_view
-	var store: BuildingVisibilityController = view.building_controllers["corner_store"]
-	_place_player(Vector2(8.5, 3.5), 0)
-	view._process(0.0)
-	_expect(store.state == BuildingVisibilityController.State.EXTERIOR_CUTAWAY,
-		"street player activates tall building exterior cutaway")
-	_expect(not (store.floors[1] as BuildingFloor).visible and not (store.roofs[0]["node"] as Node3D).visible,
-		"exterior cutaway slices upper floors and roof")
-	var visible_walls := 0
-	var faded_walls := 0
-	for wall: OccludableWall in (store.floors[0] as BuildingFloor).walls:
-		if wall.mesh.visible:
-			visible_walls += 1
-		if wall.is_cutaway():
-			faded_walls += 1
-	_expect(visible_walls > 0 and faded_walls > 0, "exterior fades only architecture in player view corridor")
-	view.camera_yaw += PI
-	game.player.facing_direction = Vector2.LEFT
-	view._process(0.0)
-	_expect(store.state == BuildingVisibilityController.State.EXTERIOR_FULL, "rotating away restores exterior")
-	view.camera_yaw -= PI
-	_place_player(Vector2(11.5, 3.0), 0)
-	view._process(0.0)
-	_expect(store.state == BuildingVisibilityController.State.INTERIOR, "exterior to interior transition keeps correct state")
-	_place_player(Vector2(6.3, 6.0), 0)
-	view._process(0.0)
-	var sign: SmallOccluder = view.small_occluders[0]
-	_expect(sign.occluded, "small sign detects partial body occlusion")
-	var entry: Dictionary = sign.meshes[1]
-	_expect((entry["node"] as MeshInstance3D).material_override == entry["fade"], "small prop uses dedicated dither shader")
-	var reveal: Vector4 = (entry["fade"] as ShaderMaterial).get_shader_parameter("reveal_rect")
-	_expect(reveal.z > 0.0 and reveal.w > 0.0 and reveal.z < 0.5,
-		"dither reveal is localized to projected player body")
-	_place_player(Vector2(17.5, 13.5), 0)
-	view._process(0.0)
-	_expect(not sign.occluded and (entry["node"] as MeshInstance3D).material_override == entry["original"],
-		"small prop restores original material after obstruction ends")
-	game.player.facing_direction = Vector2.DOWN
-	view._process(0.0)
-	_expect(_all_building_parts_visible(), "all exterior cuts restored after leaving corridor")
-	var index := BuildingOcclusionSystem.new()
-	var distant := SmallOccluder.new()
-	add_child(distant)
-	index.register_zone(OcclusionZone.new(AABB(Vector3(1000, 0, 1000), Vector3.ONE), distant))
-	index.update_view("", 0, Vector3.ZERO, Vector3(1, 1, 1).normalized(), 20.0, Vector4.ZERO)
-	_expect(index.last_candidate_count == 0, "spatial index skips remote city blocks")
-	distant.queue_free()
-
-
-func _test_room_privacy_and_visible_contents() -> void:
-	var view := game.world_3d_view
-	game.zombie_spawner.clear_population()
-	_place_player(Vector2(13.5, 9.1), 0)
-	game.player.facing_direction = Vector2.UP
-	view._process(0.0)
-	_expect(game.world_map.has_line_of_sight(game.player.logical_position, Vector2(13.5, 8.3), 0),
-		"privacy regression uses an open doorway with unobstructed simulation LOS")
-	_expect(game.visibility.can_see_position(Vector2(13.5, 8.3), 0),
-		"outside reveals interior through an unobstructed open doorway")
-	_expect(not game.visibility.can_see_position(Vector2(11.5, 8.3), 0),
-		"solid exterior wall still conceals indoor contents outside the doorway sightline")
-	var zombie := game.zombie_spawner._spawn(Vector2(13.5, 8.3), 0)
-	view._update_actors()
-	_expect(zombie != null and (view.actor_visuals[zombie.get_instance_id()]["root"] as Node3D).visible,
-		"indoor zombie is visible from outside when the doorway provides real LOS")
-	_place_player(Vector2(13.5, 8.9), 0)
-	view._process(0.0)
-	_expect((view.actor_visuals[zombie.get_instance_id()]["root"] as Node3D).visible,
-		"entering same room reveals visible indoor actor")
-	var other_tile := game.world_map.get_tile(Vector2(13.5, 7.5), 0)
-	var saved_room := other_tile.room_id
-	other_tile.room_id = "separate_test_room"
-	_expect(game.visibility.can_see_position(Vector2(13.5, 7.5), 0),
-		"room metadata alone does not hide an otherwise unobstructed sightline")
-	other_tile.room_id = saved_room
-	_place_player(Vector2(13.5, 9.1), 0)
-	view._process(0.0)
-	_expect((view.actor_visuals[zombie.get_instance_id()]["root"] as Node3D).visible,
-		"leaving the room keeps doorway-visible contents readable from outside")
-	game.zombie_spawner.clear_population()
-	# A wall misses the player's body but covers contents to the right in the FOV.
-	var test_building := BuildingVisibilityController.new()
-	view.add_child(test_building)
-	test_building.building_id = "visible_contents_test"
-	var wall := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(2.0, 2.7, 0.12)
-	wall.mesh = mesh
-	wall.position = Vector3(5, 1.35, 4)
-	view.add_child(wall)
-	var wall_handle := OccludableWall.new(wall)
-	wall_handle.apply_cutaway(true, Vector3(5, 0, 5), Vector3(0, 0, 1), 12.0)
-	_expect(wall.visible,
-		"LOS-ending wall stays rendered when it is not between camera and player")
-	wall_handle.apply_cutaway(true, Vector3(5, 0, 5), Vector3(0, 0, -1), 12.0)
-	_expect(wall_handle.is_cutaway(),
-		"wall fades only when it overlaps the camera-to-player body corridor")
-	wall_handle.advance_fade(0.08)
-	_expect(wall_handle.fade_material.albedo_color.a < 1.0 and wall_handle.fade_material.albedo_color.a > OccludableWall.CUTAWAY_ALPHA,
-		"wall cutaway transitions through a visible alpha gradient")
-	wall_handle.apply_cutaway(false, Vector3(5, 0, 5), Vector3(0, 0, -1), 12.0)
-	wall.visible = true
-	test_building.register_part({"node": wall, "floor": 0, "kind": "wall"})
-	var registered_wall: OccludableWall = (test_building.floors[0] as BuildingFloor).walls[0]
-	var index := BuildingOcclusionSystem.new()
-	index.register_zone(OcclusionZone.new(OcclusionZone.node_bounds(test_building), test_building))
-	var direction := Vector3(0, 1, 1).normalized()
-	index.update_view("", 0, Vector3.ZERO, direction, 12, Vector4.ZERO)
-	_expect(wall.visible, "off-body wall is retained without visible contents behind it")
-	var regions: Array[AABB] = [AABB(Vector3(4.6, 0.03, 1.6), Vector3(0.8, 1.85, 0.8))]
-	index.update_view("", 0, Vector3.ZERO, direction, 12, Vector4.ZERO, regions)
-	_expect(registered_wall.is_cutaway(), "wall hiding FOV contents fades even when it misses player body")
-	index.update_view("", 0, Vector3.ZERO, direction, 12, Vector4.ZERO)
-	_expect(not registered_wall.is_cutaway(), "wall restores opacity when contents leave visible range")
-	test_building.queue_free()
-
-
-func _all_building_parts_visible() -> bool:
-	for part in game.world_3d_view.structure_parts:
-		if part["kind"] == "roof" and int(part["floor"]) - 1 > game.world_3d_view._stream_floor:
-			if (part["node"] as Node3D).visible:
-				return false
-			continue
-		if part["kind"] == "stairs":
-			continue # Stair visibility is driven by actual player LOS, not shell restoration.
-		if not (part["node"] as Node3D).is_visible_in_tree():
-			return false
-	return true
-
+	var id := "safehouse:legacy_door_0"
+	var barrier: Dictionary = map.barriers[id]
+	var original := map.is_barrier_open(id)
+	var midpoint: Vector2 = (barrier["start"] + barrier["end"]) * 0.5
+	var edge: Vector2 = (barrier["end"] - barrier["start"]).normalized()
+	var inward := Vector2(edge.y, -edge.x)
+	map.set_barrier_open(id, true)
+	_place_player(midpoint, 0)
+	game.player.facing_direction = inward
+	game.interactions.request_interaction()
+	_expect(not map.is_barrier_open(id) and map.can_stand(game.player.logical_position, 0)
+		and game.player.logical_position.distance_to(midpoint) >= WorldMap.ACTOR_RADIUS,
+		"closing a door under the player resolves collision overlap")
+	_expect(not map.has_line_of_sight(game.player.logical_position, midpoint + inward * 0.55, 0),
+		"closed door still blocks gameplay LOS after removing player FOV")
+	var count := 0
+	var opaque := true
+	for key: Vector2i in view.chunk_builder.barrier_chunks[id]:
+		var root: Node3D = view.streamer.resident[key]["node"]
+		for mesh: MeshInstance3D in root.get_meta("barriers")[id]:
+			count += 1
+			opaque = opaque and mesh.visible and (mesh.material_override as StandardMaterial3D).transparency == BaseMaterial3D.TRANSPARENCY_DISABLED
+	_expect(count == 1 and opaque, "closed door retains exactly one opaque mesh")
+	var builds := view.streamer.total_builds
+	map.set_barrier_open(id, true)
+	_expect(view.streamer.total_builds == builds, "opening a barrier never rebuilds static chunks")
+	map.set_barrier_open(id, original)
 
 func _test_world_and_stairs() -> void:
 	var map := game.world_map
 	_expect(map.definition.id == "orangeville_prototype" and map.width == 64 and map.height == 64,
 		"runtime loads the authored 64 by 64 Orangeville map resource")
-	var floor_batches := 0
-	for part in game.world_3d_view.structure_parts:
-		if part["kind"] == "floor":
-			floor_batches += 1
-	_expect(floor_batches < 24, "64 by 64 map batches floor rendering instead of creating one node per tile")
+	_expect(game.world_3d_view.streamer.resident.size() <= 25, "demo map uses bounded horizontal chunks for all floors")
 	_expect(MAP_VALIDATOR.validate(map.definition).is_empty(), "authored Orangeville map validates before play")
 	_expect(map.floor_levels() == [0, 1, 2], "three independent logical floors")
 	_expect(map.get_tile(Vector2(1.5, 1.5), 1) == null, "upper outdoor void has no support")
@@ -493,17 +275,6 @@ func _test_world_and_stairs() -> void:
 
 func _test_visibility_and_combat() -> void:
 	_place_player(Vector2(14.5, 6.5), 1)
-	game.visibility.seen_tiles.clear()
-	game.visibility.refresh(game.player.logical_position, Vector2.DOWN, false, 1)
-	_expect(game.visibility.can_see_position(Vector2(14.5, 6.9), 1), "FOV sees current floor")
-	_expect(not game.visibility.can_see_position(Vector2(14.5, 6.9), 0), "FOV blocks same XY on other floor")
-	_expect(not game.visibility.was_tile_seen(Vector2i(14, 6), 0), "exploration memory does not leak between floors")
-	var explored_fog := World3DView.fog_color_for_seen(true)
-	var unexplored_fog := World3DView.fog_color_for_seen(false)
-	_expect(explored_fog.a > 0.0 and explored_fog.a < 1.0,
-		"explored space uses translucent memory shading outside current FOV")
-	_expect(unexplored_fog == Color(0.0, 0.0, 0.0, 1.0),
-		"unexplored space remains fully black")
 	game.zombie_spawner.clear_population()
 	var zombie := game.zombie_spawner._spawn(Vector2(14.5, 6.9), 1)
 	_expect(zombie != null, "zombie can spawn upstairs")
@@ -511,16 +282,14 @@ func _test_visibility_and_combat() -> void:
 	var visual: Dictionary = game.world_3d_view.actor_visuals[zombie.get_instance_id()]
 	_expect((visual["root"] as Node3D).visible and (visual["health_bar"] as Node3D).visible, "visible upstairs zombie and health bar agree")
 	_place_player(Vector2(14.5, 6.5), 0)
-	game.visibility.refresh(game.player.logical_position, Vector2.DOWN, false, 0)
 	game.world_3d_view._update_actors()
-	_expect(not (visual["root"] as Node3D).visible and not (visual["health_bar"] as Node3D).visible, "floor hiding removes both zombie and health bar")
+	_expect((visual["root"] as Node3D).visible and (visual["health_bar"] as Node3D).visible, "upper-floor actors remain rendered and are naturally occluded by the slab")
 	var health := game.player_state.health
 	zombie._process(0.05)
 	_expect(is_equal_approx(health, game.player_state.health), "zombie cannot attack through slab")
 	game._on_player_attack(game.player.logical_position, Vector2.DOWN)
 	_expect(zombie.health == ZombieActor.MAX_HEALTH, "player cannot attack through slab")
 	_place_player(Vector2(14.5, 6.5), 1)
-	game.visibility.refresh(game.player.logical_position, Vector2.DOWN, false, 1)
 	game._on_player_attack(game.player.logical_position, Vector2.DOWN)
 	_expect(zombie.health == ZombieActor.MAX_HEALTH - 1, "directional melee damages same-floor target")
 	zombie.attack_cooldown = 0.0
@@ -550,6 +319,9 @@ func _test_actions_and_inventory() -> void:
 	game.interactions._update_active_action(2.0)
 	var progress := container.search_progress_seconds
 	_expect(progress > 0.0, "search progress is recorded during action")
+	game.hud.close_panels()
+	game.mouse_released = false
+	game._sync_mouse_capture()
 	var move := InputEventKey.new()
 	move.keycode = KEY_W
 	move.pressed = true
@@ -665,7 +437,8 @@ func _test_npc_and_paths() -> void:
 	game.player.stair_id = link.id
 	zombie = game.zombie_spawner._spawn(link.start, 0)
 	zombie._process(0.01)
-	_expect(zombie.has_target and zombie.target_floor == 1, "seeing player enter stairs creates upstairs pursuit goal")
+	_expect(zombie.has_target and zombie.target_stair_id == link.id
+		and zombie.target_position.is_equal_approx(game.player.logical_position), "seeing player enter stairs tracks the observed position on that stair")
 	zombie.logical_position = link.start + link.direction() * 0.25
 	zombie.stair_id = link.id
 	zombie.attack_cooldown = 0.0
@@ -691,6 +464,15 @@ func _test_save_and_pause() -> void:
 	zombie.last_stimulus_time = GameTime.elapsed_game_seconds
 	var data := QuickSave.snapshot(game)
 	_expect(QuickSave.validate(data, game), "snapshot schema accepts a real stair traversal state")
+	var barrier_id := ""
+	for id: String in game.world_map.barriers:
+		if game.world_map.barriers[id]["kind"] == "door": barrier_id = id; break
+	var saved_barrier_open := game.world_map.is_barrier_open(barrier_id)
+	_expect(not barrier_id.is_empty() and game.world_map.set_barrier_open(barrier_id, not saved_barrier_open),
+		"barrier state is captured before a door is changed")
+	QuickSave.restore(game, data)
+	_expect(game.world_map.is_barrier_open(barrier_id) == saved_barrier_open,
+		"save/load restores the door state")
 	var wrong_map := data.duplicate(true)
 	wrong_map["map_identity"]["id"] = "another_map"
 	_expect(not QuickSave.validate(wrong_map, game), "save from another map is rejected")
@@ -704,10 +486,20 @@ func _test_save_and_pause() -> void:
 	wrong_map["player"]["position"] = Vector2(4.45, 6.65)
 	QuickSave.restore(game, wrong_map)
 	_expect(game.player.logical_position == before_restore, "map mismatch restore leaves live player untouched")
-	for key in [Vector3i(-1, 0, 0), Vector3i(game.world_map.width, 0, 0), Vector3i(0, 0, 99), Vector3i(63, 63, 2)]:
-		var bad_seen := data.duplicate(true)
-		bad_seen["seen"][key] = true
-		_expect(not QuickSave.validate(bad_seen, game), "save rejects unsupported exploration tile %s" % key)
+	var legacy_v9 := data.duplicate(true)
+	legacy_v9["version"] = 9
+	legacy_v9["seen"] = {Vector3i(1, 1, 0): true}
+	var migrated_v9 := QuickSave._migrate_v9(legacy_v9)
+	_expect(QuickSave.validate(migrated_v9, game) and not migrated_v9.has("seen") and legacy_v9.has("seen"),
+		"v9 exploration is dropped on a copy while the original save remains intact")
+	var legacy_path := OS.get_temp_dir().path_join("pz-v9-migration-%d.save" % Time.get_ticks_usec())
+	var legacy_file := FileAccess.open(legacy_path, FileAccess.WRITE)
+	legacy_file.store_var(legacy_v9, false)
+	legacy_file.close()
+	var legacy_bytes := FileAccess.get_file_as_bytes(legacy_path)
+	_expect(QuickSave.load_game(game, legacy_path) and FileAccess.get_file_as_bytes(legacy_path) == legacy_bytes
+		and not QuickSave.snapshot(game).has("seen"), "loading a real v9 file migrates without modifying its bytes")
+	DirAccess.remove_absolute(legacy_path)
 	var legacy := data.duplicate(true)
 	legacy["version"] = 7
 	legacy.erase("map_identity")
@@ -725,7 +517,7 @@ func _test_save_and_pause() -> void:
 	invalid["player"]["floor"] = 99
 	_expect(not QuickSave.validate(invalid, game), "invalid floor save is rejected before mutation")
 	var saved_position := game.player.logical_position
-	var path := "/tmp/pz-mvp-check-%d.save" % Time.get_ticks_usec()
+	var path := OS.get_temp_dir().path_join("pz-mvp-check-%d.save" % Time.get_ticks_usec())
 	_expect(QuickSave.save_game(game, path), "save writes complete versioned snapshot")
 	_expect(QuickSave.save_game(game, path), "saving existing slot atomically replaces previous snapshot")
 	_place_player(Vector2(4.45, 6.65), 0)

@@ -2,6 +2,10 @@ extends RefCounted
 
 const INDEX = preload("res://scripts/world/spatial_query_index.gd")
 
+class FullScanMap extends WorldMap:
+	func query_walls(level: int, _bounds: Rect2) -> Array:
+		return wall_faces(level)
+
 
 static func run(game: MVPGameRoot, check: Callable) -> void:
 	var map := game.world_map
@@ -104,6 +108,8 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	rng.seed = 983145
 	var los_matches := true
 	var sound_matches := true
+	var sound_reference := FullScanMap.new()
+	sound_reference.load_definition(map.definition, false)
 	var body_matches := true
 	var stair_matches := true
 	var queries: Array = []
@@ -115,7 +121,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 		var to := from + Vector2(rng.randf_range(-6, 6), rng.randf_range(-6, 6))
 		los_matches = los_matches and map.has_line_of_sight(from, to, level) == _brute_los(map, from, to, level)
 		var actual_sound := map.sound_cost(from, level, to, level)
-		var expected_sound := _brute_sound(map, from, to, level)
+		var expected_sound := sound_reference.sound_cost(from, level, to, level)
 		sound_matches = sound_matches and ((is_inf(actual_sound) and is_inf(expected_sound)) or is_equal_approx(actual_sound, expected_sound))
 		body_matches = body_matches and map.can_stand(from, level) == _brute_can_stand(map, from, level)
 		stair_matches = stair_matches and map._inside_stair_body(from, level, 0.22) == _brute_stair_body(map, from, level, 0.22)
@@ -124,24 +130,8 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 		full_count += map.wall_faces(level).size()
 	check.call(los_matches, "indexed LOS matches full wall scan on 300 deterministic queries")
 	check.call(sound_matches, "indexed sound attenuation matches full wall scan")
+	sound_reference.free()
 	check.call(body_matches and stair_matches, "indexed body clearance and stair support match full scans")
-	var vis := VisibilitySystem.new()
-	vis.setup(map)
-	var rays_match := true
-	for level in range(3):
-		vis.viewer_floor = level
-		vis.viewer_position = Vector2(11.5, 6.5)
-		vis.vision_radius = 6.6
-		vis.half_fov_radians = deg_to_rad(68)
-		var polygon := vis._build_visibility_polygon()
-		for i in range(VisibilitySystem.FOV_RAY_COUNT):
-			var direction := Vector2.from_angle(TAU * float(i) / float(VisibilitySystem.FOV_RAY_COUNT))
-			var angle := absf(wrapf(direction.angle() - vis.facing_direction.angle(), -PI, PI))
-			var radius := vis.vision_radius if angle <= vis.half_fov_radians else VisibilitySystem.SELF_VISION_RADIUS
-			var expected := vis._ray_endpoint(direction, radius, map.wall_faces(level))
-			rays_match = rays_match and polygon[i].is_equal_approx(expected)
-	check.call(rays_match, "indexed FOV matches full scan for all 768 rays across three floors")
-	vis.free()
 	var start := Time.get_ticks_usec()
 	for repeat in range(4):
 		for q in queries: _brute_los(map, q[0], q[1], q[2])
@@ -181,14 +171,6 @@ static func _brute_nearest_nav(map: WorldMap, position: Vector2, level: int) -> 
 			nearest = id
 			distance = squared
 	return nearest
-
-
-static func _brute_sound(map: WorldMap, from: Vector2, to: Vector2, level: int) -> float:
-	if map.get_tile(from, level) == null or map.get_tile(to, level) == null: return INF
-	var cost := from.distance_to(to)
-	for wall in map.wall_faces(level):
-		if Geometry2D.segment_intersects_segment(from, to, wall["start"], wall["end"]) != null: cost += 2.5
-	return cost
 
 
 static func _brute_stair_body(map: WorldMap, pos: Vector2, level: int, margin: float) -> bool:

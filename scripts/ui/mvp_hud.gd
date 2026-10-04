@@ -27,6 +27,7 @@ var action_bar: ProgressBar
 var action_label: Label
 var _game: MVPGameRoot
 var drop_surface: InventoryDropSurface
+var crosshair: Label
 
 
 func _ready() -> void:
@@ -34,6 +35,18 @@ func _ready() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	crosshair = Label.new()
+	crosshair.text = "+"
+	crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	crosshair.add_theme_font_size_override("font_size", 24)
+	root.add_child(crosshair)
+	crosshair.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	crosshair.offset_left = -12
+	crosshair.offset_top = -18
+	crosshair.offset_right = 12
+	crosshair.offset_bottom = 18
 	drop_surface = InventoryDropSurface.new()
 	drop_surface.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	drop_surface.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -54,8 +67,6 @@ func _ready() -> void:
 	pause_button = _button(bar, "Pause", func() -> void: GameTime.toggle_pause(), true)
 	normal_button = _button(bar, "1x", func() -> void: GameTime.set_speed(GameTime.SpeedMode.NORMAL), true)
 	fast_button = _button(bar, "3x", func() -> void: GameTime.set_speed(GameTime.SpeedMode.FAST), true)
-	_button(bar, "+", func() -> void: adjust_zoom(1.12))
-	_button(bar, "−", func() -> void: adjust_zoom(1.0 / 1.12))
 	_button(bar, "Inventory", toggle_inventory)
 	_button(bar, "Character [C]", toggle_character_panel)
 	_button(bar, "Help", func() -> void: help_panel.visible = not help_panel.visible)
@@ -93,7 +104,7 @@ func _ready() -> void:
 	help_panel.offset_top = 90
 	help_panel.visible = false
 	help_label = _label(help_panel, 14)
-	help_label.text = ("WASD move · Shift sprint\nRMB aim · LMB attack · E interact · Tab inventory · C character\nF eat · V drink · R sort · Esc cancel action\nMMB drag rotate · Wheel zoom\nSpace pause · 1 normal · 2 fast-forward\nWalk into a stair landing to go up/down.\nF5 quick save · F9 load (paused)\nAfter death: Enter starts a new run.")
+	help_label.text = ("Mouse look · WASD move/strafe · Shift sprint\nRMB aim · LMB attack · E interact · Tab inventory · C character\nF eat · V drink · R sort\nEsc close panel / release cursor and cancel action\nClick the world to resume mouse look. No camera zoom.\nSpace pause · 1 normal · 2 fast-forward\nWalk into a stair landing to go up/down.\nF5 quick save · F9 load (paused)\nAfter death: Enter starts a new run.")
 
 	var bottom := _panel(root)
 	bottom.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -217,9 +228,14 @@ func _display_weight(inventory: InventoryGrid) -> float:
 	return _cached_weight
 
 
-func adjust_zoom(factor: float) -> void:
-	if world_view != null:
-		world_view.set_zoom_factor(clampf(factor, 0.5, 2.0))
+func has_open_panel() -> bool:
+	return details.visible or character_panel.visible or character_creation_panel.visible or help_panel.visible
+
+
+func close_panels() -> void:
+	for panel: Control in [details, character_panel, character_creation_panel, help_panel]:
+		panel.hide()
+
 
 func _status_icons(state: PlayerState) -> String:
 	var entries: Array[String] = []

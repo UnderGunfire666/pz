@@ -19,6 +19,7 @@ var stair_id := ""
 var facing_direction := Vector2.DOWN
 var aim_mode := false
 var interaction_locked := false
+var controls_enabled := true
 var _attack_cooldown_left := 0.0
 var _attack_flash_left := 0.0
 var _last_exertion := 0.0
@@ -37,9 +38,11 @@ func _process(delta: float) -> void:
 	if world_map == null or state.is_dead():
 		return
 	var simulation_scale := GameTime.simulation_scale()
-	aim_mode = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and get_viewport().gui_get_hovered_control() == null
+	aim_mode = controls_enabled and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
 	_attack_cooldown_left = maxf(0.0, _attack_cooldown_left - delta * simulation_scale)
 	_attack_flash_left = maxf(0.0, _attack_flash_left - delta)
+	if not controls_enabled:
+		return
 
 	var move_input := Vector2(
 		float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
@@ -59,29 +62,19 @@ func _process(delta: float) -> void:
 		_last_exertion *= state.exertion_multiplier()
 		var movement := move_input * speed * delta * simulation_scale
 		var previous_position := logical_position
+		var previous_point := ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.12)
 		var result := world_map.move_actor(logical_position, floor_level, movement, stair_id)
 		logical_position = result["position"]
 		floor_level = int(result["floor"])
 		stair_id = String(result["stair_id"])
 		if logical_position != previous_position:
-			_footstep_distance += previous_position.distance_to(logical_position)
+			_footstep_distance += previous_point.distance_to(ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.12))
 			if _footstep_distance >= 0.75:
-				_footstep_distance = 0.0
-				NoiseBus.emit_noise(logical_position, 4.0 if sprinting else 1.6, "footsteps", floor_level)
+				_footstep_distance = fmod(_footstep_distance, 0.75)
+				NoiseBus.emit_actor_noise(self, 4.3 if sprinting else 2.2, "footsteps", 1.0, 0.12)
 			moved.emit(logical_position)
 		else:
 			_last_exertion = 0.0
-		if not aim_mode:
-			facing_direction = move_input
-
-	if aim_mode:
-		var aim_target := world_view.mouse_to_logical(
-			get_viewport().get_mouse_position(),
-			floor_level
-		)
-		var aim_vector := aim_target - logical_position
-		if aim_vector.length_squared() > 0.001:
-			facing_direction = aim_vector.normalized()
 
 
 func try_attack() -> void:
@@ -97,7 +90,7 @@ func try_attack() -> void:
 	_attack_cooldown_left = ATTACK_COOLDOWN / maxf(0.25, performance)
 	_attack_flash_left = 0.18
 	attack_requested.emit(logical_position, facing_direction)
-	NoiseBus.emit_noise(logical_position, 4.4, "melee strike", floor_level)
+	NoiseBus.emit_actor_noise(self, 4.4, "melee strike")
 
 
 func exertion() -> float:

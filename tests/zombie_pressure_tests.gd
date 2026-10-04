@@ -58,7 +58,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	var heard_at := Vector2(16.0, 11.8)
 	NoiseBus.emit_noise(heard_at, 8.0, "test noise", 0, 1.0)
 	check.call(migrant.awareness == ZombieActor.Awareness.SOUND and migrant.target_actor_id.is_empty()
-		and migrant.target_position.is_equal_approx(heard_at),
+		and migrant.target_position.distance_to(heard_at) < 1.0 and not migrant.target_position.is_equal_approx(heard_at),
 		"sound creates an anonymous temporary investigation point")
 	var sound_target := migrant.target_position
 	var old_player_position := game.player.logical_position
