@@ -152,12 +152,13 @@ static func _brute_los(map: WorldMap, from: Vector2, to: Vector2, level: int) ->
 
 static func _navigation_signature(map: WorldMap) -> Dictionary:
 	var edges: Array[String] = []
-	for id in range(map._navigation.get_point_count()):
-		var neighbours: Array[int] = []
+	for id in map._navigation.get_point_ids():
+		var neighbours: Array[String] = []
 		for connected in map._navigation.get_point_connections(id):
-			neighbours.append(connected)
+			neighbours.append(str(map._navigation.get_point_position(connected)))
 		neighbours.sort()
-		edges.append("%d:%s" % [id, neighbours])
+		edges.append("%s:%s" % [map._navigation.get_point_position(id), neighbours])
+	edges.sort()
 	return {"points": map._navigation.get_point_count(), "edges": edges}
 
 
@@ -183,6 +184,10 @@ static func _brute_stair_body(map: WorldMap, pos: Vector2, level: int, margin: f
 
 
 static func _brute_can_stand(map: WorldMap, pos: Vector2, level: int) -> bool:
+	for body in map.furniture:
+		if body["level"] == level:
+			var rect: Rect2 = body["rect"]
+			if rect.has_point(pos) or pos.distance_to(pos.clamp(rect.position, rect.end)) < WorldMap.ACTOR_RADIUS: return false
 	var tile := map.get_tile(pos, level)
 	if tile == null or not tile.walkable or _brute_stair_body(map, pos, level, WorldMap.ACTOR_RADIUS): return false
 	for offset in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:

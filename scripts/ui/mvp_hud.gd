@@ -168,6 +168,10 @@ func _setup_character_creation() -> void:
 
 func refresh(game: MVPGameRoot) -> void:
 	_game = game
+	# Aim can change while the cached status/inventory signature stays identical.
+	var focus := PlayerTargeting.interaction_target(game.interactions)
+	prompt_label.text = game.interactions.prompt(focus)
+	crosshair.modulate = Color.WHITE if focus.is_empty() else (Color("86e3a1") if focus["reachable"] else Color("efbc72"))
 	if not game.interactions.container_view_requested.is_connected(_view_container):
 		game.interactions.container_view_requested.connect(_view_container)
 	action_row.visible = not game.interactions.active_action.is_empty()
@@ -210,7 +214,6 @@ func refresh(game: MVPGameRoot) -> void:
 	if character_panel.visible:
 		character_panel.refresh(game)
 	objective_label.text = game.objective_text()
-	prompt_label.text = game.interactions.prompt()
 	notification_label.text = game.notification
 	if game.player_state.is_dead():
 		objective_label.text = "You died · Enter: new run · F9: load quick save"

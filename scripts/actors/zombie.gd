@@ -26,6 +26,7 @@ var target_stair_id := ""
 var has_target := false
 var attack_cooldown := 0.0
 var facing_direction := Vector2.DOWN
+var look_pitch := 0.0
 var awareness: Awareness = Awareness.IDLE
 var target_actor_id := ""
 var visual_memory_expires_at := 0.0
@@ -96,14 +97,21 @@ func _process(delta: float) -> void:
 		_update_perception()
 	_update_memory()
 	if has_target:
+		ActorCombat.turn_toward(self, ActorPerception.point(world_map, target_position, target_floor, target_stair_id, ActorPerception.CHEST_HEIGHT), scaled_delta)
+	if has_target:
 		_move_toward_target(scaled_delta)
 		if ((target_stair_id.is_empty() and floor_level == target_floor and stair_id.is_empty()) \
 			or (not target_stair_id.is_empty() and stair_id == target_stair_id)) and logical_position.distance_to(target_position) <= 0.20:
 			_reached_target()
-	if _can_hit_player() and attack_cooldown <= 0.0:
+	var victim: Node = null
+	if attack_cooldown <= 0.0:
+		victim = ActorCombat.select_target(self, get_tree().get_nodes_in_group("zombie_targets"), ActorCombat.direction(self), ActorCombat.ZOMBIE_REACH)
+	if victim != null and attack_cooldown <= 0.0:
 		attack_cooldown = 1.8
-		player_state.receive_hit("Scratch", "Right Arm", 12.0, true)
-		attacked_player.emit(logical_position)
+		if victim is PlayerController:
+			victim.state.receive_hit("Scratch", "Right Arm", 12.0, true)
+			attacked_player.emit(logical_position)
+		else: victim.take_damage(12.0)
 		NoiseBus.emit_actor_noise(self, 3.0, "struggle")
 
 
@@ -120,6 +128,8 @@ func _nearest_visible_target() -> Node:
 	var nearest_distance := INF
 	for candidate in get_tree().get_nodes_in_group("zombie_targets"):
 		if not is_instance_valid(candidate): continue
+		if candidate.get("world_map") != world_map: continue
+		if candidate is SurvivorNPC and candidate.health <= 0: continue
 		if candidate is PlayerController and candidate.state.is_dead(): continue
 		var distance := ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.0).distance_to(
 			ActorPerception.point(world_map, candidate.logical_position, candidate.floor_level, candidate.stair_id, 0.0))
@@ -267,9 +277,7 @@ func _clear_target() -> void:
 
 func _can_hit_player() -> bool:
 	if player_state.is_dead(): return false
-	var from := ActorPerception.point(world_map, logical_position, floor_level, stair_id, ActorPerception.CHEST_HEIGHT)
-	var to := ActorPerception.point(world_map, player.logical_position, player.floor_level, player.stair_id, ActorPerception.CHEST_HEIGHT)
-	return from.distance_to(to) < 0.72 and world_map.has_spatial_line_of_sight(from, to)
+	return not ActorCombat.contact(self, player, ActorCombat.direction(self), ActorCombat.ZOMBIE_REACH).is_empty()
 
 func take_damage(amount: int) -> void:
 	if amount <= 0 or health <= 0 or is_queued_for_deletion(): return
@@ -305,7 +313,7 @@ func perception_save_data() -> Dictionary:
 		"search_expires_at": search_expires_at, "stimulus_lock_until": stimulus_lock_until,
 		"last_stimulus_time": last_stimulus_time, "last_stimulus_loudness": last_stimulus_loudness,
 		"last_heard_strength": last_heard_strength,
-		"migration_area_id": migration_area_id, "facing": facing_direction}
+		"migration_area_id": migration_area_id, "facing": facing_direction, "look_pitch": look_pitch}
 
 
 func load_perception_save_data(data: Dictionary) -> void:
@@ -322,3 +330,4 @@ func load_perception_save_data(data: Dictionary) -> void:
 	last_hearing = {}
 	migration_area_id = data["migration_area_id"]
 	facing_direction = data["facing"]
+	look_pitch = float(data.get("look_pitch", 0.0))

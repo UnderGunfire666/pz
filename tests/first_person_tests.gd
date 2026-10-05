@@ -65,6 +65,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	game.player.logical_position = saved_position
 	game.player.floor_level = saved_floor
 	game.player.stair_id = saved_stair
+	game.player.look_pitch = 0.0
 	game.player.facing_direction = saved_facing
 	view.sync_view_to_player()
 	view._process(0.0)

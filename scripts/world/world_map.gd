@@ -25,6 +25,7 @@ var floors: Dictionary = {}
 var buildings: Dictionary = {}
 var stairs: Dictionary = {}
 var barriers: Dictionary = {}
+var furniture: Array[Dictionary] = []
 var revision := 0
 var _navigation := AStar3D.new()
 var _nav_points: Dictionary = {}
@@ -39,6 +40,9 @@ var _zombie_areas := ZombieAreaCatalog.new()
 var _wall_index := SPATIAL_QUERY_INDEX.new()
 var _stair_index := SPATIAL_QUERY_INDEX.new()
 var _spatial_index_ready := false
+var _path_cache: Dictionary = {}
+var _path_cache_revision := -1
+var path_cache_hits := 0
 
 
 func _ready() -> void:
@@ -55,6 +59,7 @@ func load_definition(value: MapDefinition, build_navigation: bool = true) -> voi
 	buildings.clear()
 	stairs.clear()
 	barriers.clear()
+	furniture.clear()
 	_spatial_index_ready = false
 	for cell: MapCellDefinition in definition.cells:
 		width = max(width, cell.cell_coordinate.x * cell.size.x + cell.size.x)
@@ -482,6 +487,7 @@ func wall_faces(level: int) -> Array[Dictionary]:
 
 
 func rebuild_spatial_index() -> void:
+	_path_cache.clear()
 	# Call after bulk direct edits to FloorData/stairs. Normal load/add APIs
 	# invalidate automatically. This rebuilds queries, not the navigation graph.
 	_wall_index.clear()
@@ -542,6 +548,7 @@ func _inside_stair_body(pos: Vector2, level: int, margin: float = 0.0) -> bool:
 
 
 func _valid_position(pos: Vector2, level: int, radius: float = ACTOR_RADIUS) -> bool:
+	if furniture_overlap(pos, level, radius): return false
 	if not _supported_position(pos, level, radius):
 		return false
 	for face in query_walls(level, Rect2(pos, Vector2.ZERO).grow(radius)):
@@ -576,15 +583,15 @@ func move_with_wall_slide(pos: Vector2, motion: Vector2, radius: float = ACTOR_R
 	return pos
 
 
-func move_actor(pos: Vector2, level: int, motion: Vector2, stair_id: String = "", radius: float = ACTOR_RADIUS) -> Dictionary:
+func move_actor(pos: Vector2, level: int, motion: Vector2, stair_id: String = "", radius: float = ACTOR_RADIUS, allowed_entry: String = "*") -> Dictionary:
 	var state := {"position": pos, "floor": level, "stair_id": stair_id}
 	var steps := maxi(1, int(ceil(motion.length() / 0.07)))
 	for _index in range(steps):
-		state = _move_step(state, motion / float(steps), radius)
+		state = _move_step(state, motion / float(steps), radius, allowed_entry)
 	return state
 
 
-func _move_step(state: Dictionary, motion: Vector2, radius: float) -> Dictionary:
+func _move_step(state: Dictionary, motion: Vector2, radius: float, allowed_entry: String = "*") -> Dictionary:
 	var pos: Vector2 = state["position"]
 	var level := int(state["floor"])
 	var id := String(state["stair_id"])
@@ -592,17 +599,20 @@ func _move_step(state: Dictionary, motion: Vector2, radius: float) -> Dictionary
 		var link: StairLink = stairs[id]
 		var along := (pos - link.start).dot(link.direction()) + motion.dot(link.direction())
 		if along <= 0.0:
+			if not _valid_position(link.start, link.from_floor, radius): return state
 			return {"position": link.start, "floor": link.from_floor, "stair_id": ""}
 		if along >= link.length():
+			if not _valid_position(link.end, link.to_floor, radius): return state
 			return {"position": link.end, "floor": link.to_floor, "stair_id": ""}
 		return {"position": link.start + link.direction() * along, "floor": level, "stair_id": id}
 	for link: StairLink in query_stairs(level, Rect2(pos, Vector2.ZERO).grow(0.28)):
+		if allowed_entry != "*" and allowed_entry != link.id: continue
 		var alignment := motion.normalized().dot(link.direction())
 		var entering_up := level == link.from_floor and pos.distance_to(link.start) <= 0.28 and alignment > 0.85
 		var entering_down := level == link.to_floor and pos.distance_to(link.end) <= 0.28 and alignment < -0.85
 		if entering_up or entering_down:
 			var along := clampf((pos - link.start).dot(link.direction()), 0.0, link.length())
-			return _move_step({"position": link.start + link.direction() * along, "floor": level, "stair_id": link.id}, motion, radius)
+			return _move_step({"position": link.start + link.direction() * along, "floor": level, "stair_id": link.id}, motion, radius, allowed_entry)
 	return {"position": move_with_wall_slide(pos, motion, radius, level), "floor": level, "stair_id": ""}
 
 
@@ -632,6 +642,8 @@ func has_line_of_sight(from: Vector2, to: Vector2, level: int = 0, to_floor: int
 
 
 func has_spatial_line_of_sight(from: Vector3, to: Vector3) -> bool:
+	for body in furniture:
+		if (body["box"] as AABB).intersects_segment(from, to) != null: return false
 	# Query authoritative world geometry even when its render chunk is absent.
 	var a := Vector2(from.x, from.z)
 	var b := Vector2(to.x, to.z)
@@ -745,6 +757,11 @@ func _segment_has_support(from: Vector2, to: Vector2, level: int,
 
 
 func _segment_has_wall_clearance(from: Vector2, to: Vector2, level: int) -> bool:
+	for body in furniture:
+		if body["level"] != level: continue
+		var rect: Rect2 = (body["rect"] as Rect2).grow(ACTOR_RADIUS)
+		var box := AABB(Vector3(rect.position.x, -1.0, rect.position.y), Vector3(rect.size.x, 2.0, rect.size.y))
+		if box.intersects_segment(Vector3(from.x, 0, from.y), Vector3(to.x, 0, to.y)) != null: return false
 	# Exact segment clearance avoids sampling past a short wall endpoint. Check
 	# each candidate wall once, rather than once for every terrain support probe.
 	var corridor := Rect2(from, Vector2.ZERO).expand(to).grow(ACTOR_RADIUS)
@@ -764,6 +781,43 @@ func _segment_has_wall_clearance(from: Vector2, to: Vector2, level: int) -> bool
 		if b.distance_to(Geometry2D.get_closest_point_to_segment(b, from, to)) < ACTOR_RADIUS:
 			return false
 	return true
+
+
+func install_furniture(points: Array[Dictionary]) -> void:
+	var old := furniture.duplicate()
+	furniture.clear()
+	for point in points:
+		if not point.get("furniture", false): continue
+		var pos: Vector2 = point["position"]
+		var size := ContainerData.CABINET_SIZE
+		var rect := Rect2(pos - Vector2(size.x, size.z) * 0.5, Vector2(size.x, size.z))
+		furniture.append({"id": point["id"], "level": point["floor"], "rect": rect,
+			"box": AABB(Vector3(rect.position.x, point["floor"] * floor_height, rect.position.y), size)})
+	for body in old + furniture:
+		var rect: Rect2 = body["rect"]
+		_refresh_navigation_near_barrier({"start": rect.position, "end": rect.end, "level": body["level"]})
+	revision += 1
+
+
+func furniture_overlap(pos: Vector2, level: int, radius: float = ACTOR_RADIUS) -> bool:
+	for body in furniture:
+		if body["level"] != level: continue
+		var rect: Rect2 = body["rect"]
+		var closest := pos.clamp(rect.position, rect.end)
+		if rect.has_point(pos) or closest.distance_to(pos) < radius: return true
+	return false
+
+
+func furniture_approach(pos: Vector2, level: int, from: Vector2) -> Vector2:
+	if can_stand(pos, level): return pos
+	var best := pos
+	var distance := INF
+	for direction in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
+		var candidate: Vector2 = pos + direction * 0.65
+		if can_stand(candidate, level) and candidate.distance_squared_to(from) < distance:
+			best = candidate
+			distance = candidate.distance_squared_to(from)
+	return best
 
 
 func _segment_walkable(from: Vector2, to: Vector2, level: int) -> bool:
@@ -829,6 +883,7 @@ func _refresh_navigation_near_barrier(barrier: Dictionary) -> void:
 
 
 func _build_navigation() -> void:
+	_path_cache.clear()
 	_navigation.clear()
 	_nav_points.clear()
 	_floor_node_ids.clear()
@@ -900,7 +955,6 @@ func _nav_grid_neighbours_connect(from: Vector2, to: Vector2, level: int) -> boo
 
 func _nearest_nav(pos: Vector2, level: int) -> int:
 	var nearest := -1
-	var distance := INF
 	var candidates: Dictionary = {}
 	var center := Vector2i(floor(pos.x / NAV_GRID_STEP), floor(pos.y / NAV_GRID_STEP))
 	for y in range(center.y - NAV_NEAREST_RADIUS_CELLS, center.y + NAV_NEAREST_RADIUS_CELLS + 1):
@@ -913,20 +967,36 @@ func _nearest_nav(pos: Vector2, level: int) -> int:
 	for id: int in _stair_nav_ids.get(level, []):
 		candidates[id] = true
 	_last_nearest_nav_candidates = candidates.size()
+	var ordered: Array = []
 	for id: int in candidates:
-		var target: Vector2 = _nav_points[id]["position"]
-		var squared := target.distance_squared_to(pos)
-		if squared < distance and squared < 2.26 and _segment_walkable(pos, target, level):
-			nearest = id
-			distance = squared
+		ordered.append([Vector2(_nav_points[id]["position"]).distance_squared_to(pos), ordered.size(), id])
+	ordered.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0] if a[0] != b[0] else a[1] < b[1])
+	for candidate: Array in ordered:
+		if float(candidate[0]) >= 2.26: break
+		var id := int(candidate[2])
+		if _segment_walkable(pos, _nav_points[id]["position"], level): return id
 	return nearest
 
 
-func find_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> Array[Dictionary]:
+func find_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int, simplify: bool = true) -> Array[Dictionary]:
+	if not _spatial_index_ready or _path_cache_revision != revision:
+		_path_cache.clear()
+		_path_cache_revision = revision
+	var key := [from, from_floor, to, to_floor, simplify]
+	if _path_cache.has(key):
+		path_cache_hits += 1
+		return _path_cache[key].duplicate(true)
+	var result := _compute_path(from, from_floor, to, to_floor, simplify)
+	if _path_cache.size() >= 64: _path_cache.erase(_path_cache.keys()[0])
+	_path_cache[key] = result.duplicate(true)
+	return result
+
+
+func _compute_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int, simplify: bool) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	if not _valid_position(from, from_floor) or not _valid_position(to, to_floor):
 		return result
-	if from_floor == to_floor and _segment_walkable(from, to, from_floor):
+	if simplify and from_floor == to_floor and _segment_walkable(from, to, from_floor):
 		return [{"position": to, "floor": to_floor}]
 	var start := _nearest_nav(from, from_floor)
 	var finish := _nearest_nav(to, to_floor)
@@ -944,6 +1014,7 @@ func find_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> Ar
 		if result[index]["floor"] != result[index + 1]["floor"]:
 			result[index]["landing"] = true
 			result[index + 1]["landing"] = true
+	if not simplify: return result
 	var simplified: Array[Dictionary] = []
 	var cursor := from
 	var level := from_floor
@@ -951,10 +1022,15 @@ func find_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> Ar
 	while index < result.size():
 		var chosen := index
 		if int(result[index]["floor"]) == level and not result[index].get("landing", false):
+			var last := index
 			for candidate in range(index + 1, mini(index + 12, result.size())):
 				if int(result[candidate]["floor"]) != level: break
-				if _segment_walkable(cursor, result[candidate]["position"], level): chosen = candidate
+				last = candidate
 				if result[candidate].get("landing", false): break
+			for candidate in range(last, index, -1):
+				if _segment_walkable(cursor, result[candidate]["position"], level):
+					chosen = candidate
+					break
 		simplified.append(result[chosen])
 		cursor = result[chosen]["position"]
 		level = int(result[chosen]["floor"])
@@ -962,14 +1038,14 @@ func find_path(from: Vector2, from_floor: int, to: Vector2, to_floor: int) -> Ar
 	return simplified
 
 
-func find_path_to_stair(from: Vector2, from_floor: int, target: Vector2, target_stair: String) -> Array[Dictionary]:
+func find_path_to_stair(from: Vector2, from_floor: int, target: Vector2, target_stair: String, simplify: bool = true) -> Array[Dictionary]:
 	var best: Array[Dictionary] = []
 	var link: StairLink = stairs.get(target_stair)
 	if link == null: return best
 	var best_cost := INF
 	for entry: Dictionary in [{"position": link.start, "floor": link.from_floor},
 		{"position": link.end, "floor": link.to_floor}]:
-		var path := find_path(from, from_floor, entry["position"], int(entry["floor"]))
+		var path := find_path(from, from_floor, entry["position"], int(entry["floor"]), simplify)
 		if path.is_empty(): continue
 		var previous := Vector3(from.x, from_floor * floor_height, from.y)
 		var cost := 0.0

@@ -73,7 +73,8 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		var entry := {"id": point["id"], "position": point["position"], "floor": point["floor"], "label": point["label"]}
 		if point.has("container"):
 			var container: ContainerData = point["container"]
-			entry.merge({"searched": container.searched, "progress": container.search_progress_seconds,
+			entry.merge({"open": container.is_open, "searched": container.searched, "progress": container.search_progress_seconds,
+				"search_duration": container.search_duration_game_seconds,
 				"contents": _pack_items(container.contents)})
 		if point.has("triggered"):
 			entry["triggered"] = point["triggered"]
@@ -94,13 +95,17 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		zombies.append(entry)
 	var npc_data := _actor_data(game.npc)
 	npc_data["facing"] = game.npc.facing_direction
+	npc_data["health"] = game.npc.health
+	npc_data["attack_cooldown"] = game.npc.attack_cooldown
+	npc_data["look_pitch"] = game.npc.look_pitch
 	npc_data["threat_memory_until"] = game.npc.threat_memory_until
 	npc_data["threat_memory_position"] = game.npc.threat_memory_position
 	npc_data["survival"] = _survival_data(game.npc.survival)
 	npc_data["brain"] = game.npc.brain.to_save_data()
 	npc_data["known_containers"] = game.npc.known_container_ids.duplicate()
-	return {"version": VERSION, "map_identity": map_identity(game.world_map.definition), "clock": GameTime.elapsed_game_seconds,
+	return {"version": VERSION, "cabinet_layout": 1, "map_identity": map_identity(game.world_map.definition), "clock": GameTime.elapsed_game_seconds,
 		"player": _actor_data(game.player), "facing": game.player.facing_direction,
+		"look_pitch": game.player.look_pitch,
 		"health": game.player_state.health, "survival": _survival_data(game.player_state.survival),
 		"wounds": game.player_state.wounds.duplicate(true),
 		"player_status": game.player_state.to_save_data(),
@@ -119,6 +124,9 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 
 
 static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
+	var pitch: Variant = data.get("look_pitch", 0.0)
+	if not (pitch is float or pitch is int) or not is_finite(float(pitch)) or absf(float(pitch)) > PlayerViewRig.PITCH_LIMIT:
+		return false
 	if data.get("version") == 3: data = _migrate_v3(data)
 	if data.get("version") == 4: data = _migrate_v4(data)
 	if data.get("version") == 5: data = _migrate_v5(data)
@@ -126,6 +134,8 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if data.get("version") == 7: data = _migrate_v7(data)
 	if data.get("version") == 8: data = _migrate_v8(data)
 	if data.get("version") == 9: data = _migrate_v9(data)
+	data = _migrate_cabinet_layout(data, game.world_map)
+	if not data.get("cabinet_layout") is int or data["cabinet_layout"] != 1: return false
 	if not _compatible_map_identity(data.get("map_identity"), map_identity(game.world_map.definition)):
 		return false
 	# Validate the entire snapshot before replacing live state.
@@ -146,6 +156,10 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		var value: Variant = data["npc"].get(key, Vector2.ZERO)
 		if not value is Vector2 or not value.is_finite(): return false
 	var memory_time: Variant = data["npc"].get("threat_memory_until", 0.0)
+	for key in ["health", "attack_cooldown", "look_pitch"]:
+		if not _number(data["npc"].get(key, 100.0 if key == "health" else 0.0)): return false
+	if float(data["npc"].get("health", 100.0)) < 0 or float(data["npc"].get("health", 100.0)) > 100.0: return false
+	if float(data["npc"].get("attack_cooldown", 0.0)) < 0 or absf(float(data["npc"].get("look_pitch", 0.0))) > PI * 0.5: return false
 	if not (memory_time is float or memory_time is int) or not is_finite(float(memory_time)): return false
 	if not PlayerState.valid_status_data(data["player_status"]): return false
 	if not CharacterProgression.valid_save_data(data["character"], game.character_catalog): return false
@@ -222,6 +236,10 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		if not entry["id"] in known_ids and not entry["id"].begins_with("dropped_"): return false
 		if entry["id"].begins_with("dropped_") and not entry.has("contents"): return false
 		if entry.has("contents"):
+			if entry.has("search_duration"):
+				if not _number(entry["search_duration"]) or float(entry["search_duration"]) <= 0.0: return false
+				if not _number(entry.get("progress")) or float(entry["progress"]) < 0.0 or float(entry["progress"]) > float(entry["search_duration"]): return false
+			if not entry.get("open", false) is bool: return false
 			if not entry["contents"] is Array or not _number(entry.get("progress")) or not entry.get("searched") is bool:
 				return false
 			var container := ContainerData.new(entry["id"], entry.get("label", "Container"))
@@ -261,6 +279,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	if data.get("version") == 7: data = _migrate_v7(data)
 	if data.get("version") == 8: data = _migrate_v8(data)
 	if data.get("version") == 9: data = _migrate_v9(data)
+	data = _migrate_cabinet_layout(data, game.world_map)
 	if not validate(data, game): return
 	game.interactions.interrupt_action("Loading")
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
@@ -269,6 +288,8 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	GameTime.last_advanced_game_seconds = 0.0
 	_restore_actor(game.player, data["player"])
 	game.player.facing_direction = data["facing"]
+	game.player.look_pitch = float(data.get("look_pitch", 0.0))
+	game.world_3d_view.first_person_hands.hurt_remaining = 0.0
 	game.world_3d_view.sync_view_to_player()
 	game.player._attack_cooldown_left = PlayerController.ATTACK_COOLDOWN
 	game.player._attack_flash_left = 0.0
@@ -300,7 +321,14 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 				for item in saved["contents"]:
 					container.contents.append(_unpack_item(item))
 				container.searched = saved["searched"]
+				container.is_open = saved.get("open", false)
 				container.search_progress_seconds = saved["progress"]
+				if saved.has("search_duration"):
+					container.search_duration_game_seconds = saved["search_duration"]
+				else:
+					# Legacy search took 360 simulation seconds; preserve its fraction.
+					container.search_progress_seconds = clampf(float(saved["progress"]) / 360.0, 0, 1) * container.search_duration_game_seconds
+					container.searched = container.searched or container.is_open
 				game.inventory.world[point["id"]] = container
 			if point.has("triggered"):
 				point["triggered"] = saved.get("triggered", false)
@@ -325,6 +353,9 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.zombie_spawner.population_preset = data["population"].get("preset", "Normal")
 	game.zombie_spawner.migration_game_seconds = data["population"]["migration_elapsed"]
 	_restore_actor(game.npc, data["npc"])
+	game.npc.health = float(data["npc"].get("health", 100.0))
+	game.npc.attack_cooldown = float(data["npc"].get("attack_cooldown", 0.0))
+	game.npc.look_pitch = float(data["npc"].get("look_pitch", 0.0))
 	game.npc.facing_direction = data["npc"].get("facing", Vector2.DOWN)
 	game.npc.threat_memory_until = data["npc"].get("threat_memory_until", 0.0)
 	game.npc.threat_memory_position = data["npc"].get("threat_memory_position", Vector2.ZERO)
@@ -560,6 +591,7 @@ static func _valid_zombie_perception(data: Variant) -> bool:
 	if not data["awareness"] is int or data["awareness"] < ZombieActor.Awareness.IDLE or data["awareness"] > ZombieActor.Awareness.MIGRATION: return false
 	if not data["target_actor_id"] is String or not data["migration_area_id"] is String or not data["facing"] is Vector2: return false
 	if not data["facing"].is_finite(): return false
+	if not _number(data.get("look_pitch", 0.0)) or absf(float(data.get("look_pitch", 0.0))) > PI * 0.5: return false
 	if not data.get("target_stair_id", "") is String: return false
 	for key in ["visual_memory_expires_at", "sound_memory_expires_at", "search_expires_at", "stimulus_lock_until", "last_stimulus_time", "last_stimulus_loudness"]:
 		if not _number(data[key]): return false
@@ -577,3 +609,31 @@ static func _valid_barrier_states(states: Variant, world_map: WorldMap) -> bool:
 		if not world_map.barriers.has(id) or not states[id] is bool:
 			return false
 	return states.size() == world_map.barriers.size()
+
+# Furniture layout is versioned independently from item/save schema. Old files
+# remain untouched; only actors/piles intersecting newly introduced bodies move.
+static func _migrate_cabinet_layout(source: Dictionary, map: WorldMap) -> Dictionary:
+	if source.get("cabinet_layout", 0) != 0: return source
+	var data := source.duplicate(true)
+	data["cabinet_layout"] = 1
+	var entries: Array = [data.get("player"), data.get("npc")]
+	if data.get("zombies") is Array: entries.append_array(data["zombies"])
+	if data.get("points") is Array:
+		for point in data["points"]:
+			if point is Dictionary and String(point.get("id", "")).begins_with("dropped_"): entries.append(point)
+	for entry in entries:
+		if not entry is Dictionary or not entry.get("position") is Vector2 or not entry.get("floor") is int: continue
+		if entry.get("stair", "") != "": continue
+		var pos: Vector2 = entry["position"]
+		var level: int = entry["floor"]
+		if not map.furniture_overlap(pos, level): continue
+		for step in range(1, 16):
+			var moved := false
+			for angle in range(16):
+				var candidate := pos + Vector2.from_angle(angle * TAU / 16.0) * (step * 0.1)
+				if map.can_stand(candidate, level) and map.has_line_of_sight(pos, candidate, level):
+					entry["position"] = candidate
+					moved = true
+					break
+			if moved: break
+	return data

@@ -262,22 +262,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			GameTime.set_speed(GameTime.SpeedMode.FAST)
 
 
-func _on_player_attack(attack_position: Vector2, direction: Vector2) -> void:
+func _on_player_attack(_attack_position: Vector2, direction: Vector2) -> void:
 	if player_state.is_dead() or GameTime.simulation_scale() <= 0.0:
 		return
 	var hit_anything := false
-	var nearest: ZombieActor = null
-	var nearest_distance := INF
-	for zombie: ZombieActor in zombie_spawner.active_zombies.duplicate():
-		if not is_instance_valid(zombie) or zombie.health <= 0 or zombie.is_queued_for_deletion():
-			continue
-		if not melee_contact(zombie, 1.25):
-			continue
-		var offset := zombie.logical_position - attack_position
-		var angle := absf(wrapf(offset.angle() - direction.angle(), -PI, PI))
-		if angle <= deg_to_rad(54.0) and offset.length() < nearest_distance:
-			nearest = zombie
-			nearest_distance = offset.length()
+	var reach := ActorCombat.WEAPON_REACH if inventory.held_weapon() != null else ActorCombat.PLAYER_REACH
+	var nearest := PlayerTargeting.melee_target(player, zombie_spawner.active_zombies, player.look_direction(direction), reach)
 	if nearest != null:
 		nearest.take_damage(inventory.attack_damage())
 		if inventory.held_weapon() == null and nearest.health > 0:
@@ -293,6 +283,7 @@ func _on_player_attack(attack_position: Vector2, direction: Vector2) -> void:
 
 
 func _on_player_attacked(_world_position: Vector2) -> void:
+	world_3d_view.first_person_hands.hurt_remaining = 0.3
 	interactions.interrupt_action("Injured")
 	milestones["injury"] = true
 	if not player_state.is_dead():
@@ -303,16 +294,6 @@ func _on_player_attacked(_world_position: Vector2) -> void:
 func _spawn_destroyed_clothing_rags(count: int) -> void:
 	if count > 0:
 		interactions.spawn_ground_stack(ItemStack.new(ClothingSystem.rag_definition(), count))
-
-
-func melee_contact(zombie: ZombieActor, attack_range: float) -> bool:
-	var height_difference := world_map.elevation_at(player.logical_position, player.floor_level, player.stair_id) - world_map.elevation_at(zombie.logical_position, zombie.floor_level, zombie.stair_id)
-	if Vector2(player.logical_position.distance_to(zombie.logical_position), height_difference).length() > attack_range:
-		return false
-	if not player.stair_id.is_empty() or not zombie.stair_id.is_empty():
-		return player.stair_id == zombie.stair_id
-	return (player.floor_level == zombie.floor_level
-		and world_map.has_line_of_sight(player.logical_position, zombie.logical_position, player.floor_level))
 
 
 func _on_player_died() -> void:
@@ -367,7 +348,7 @@ func objective_text() -> String:
 	if not milestones["safehouse"]:
 		return "1/5  Enter the safehouse through its ground-floor doorway."
 	if not milestones["food"]:
-		return "2/5  Find food: [E] at a blue container; more supplies are upstairs."
+		return "2/5  Find food: aim at a cabinet and press [E]; more supplies are upstairs."
 	if not milestones["avoid"]:
 		return "3/5  Spot a zombie, then create distance; they can follow stairs."
 	if not milestones["rest"]:

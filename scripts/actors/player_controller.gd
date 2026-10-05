@@ -17,6 +17,7 @@ var logical_position := Vector2(4.5, 7.0)
 var floor_level := 0
 var stair_id := ""
 var facing_direction := Vector2.DOWN
+var look_pitch := 0.0
 var aim_mode := false
 var interaction_locked := false
 var controls_enabled := true
@@ -40,7 +41,7 @@ func _process(delta: float) -> void:
 	var simulation_scale := GameTime.simulation_scale()
 	aim_mode = controls_enabled and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
 	_attack_cooldown_left = maxf(0.0, _attack_cooldown_left - delta * simulation_scale)
-	_attack_flash_left = maxf(0.0, _attack_flash_left - delta)
+	_attack_flash_left = maxf(0.0, _attack_flash_left - delta * simulation_scale)
 	if not controls_enabled:
 		return
 
@@ -95,3 +96,8 @@ func try_attack() -> void:
 
 func exertion() -> float:
 	return _last_exertion
+
+
+func look_direction(heading: Vector2 = Vector2.ZERO) -> Vector3:
+	if heading.is_zero_approx(): heading = facing_direction
+	return Vector3(heading.x * cos(look_pitch), sin(look_pitch), heading.y * cos(look_pitch)).normalized()

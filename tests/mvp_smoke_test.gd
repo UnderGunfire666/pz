@@ -49,6 +49,13 @@ func _run() -> void:
 	_test_world_and_stairs()
 	ZombiePressureTests.run(game, _expect)
 	FirstPersonTests.run(game, _expect)
+	preload("res://tests/first_person_upgrade_tests.gd").combat(game, _expect)
+	preload("res://tests/first_person_upgrade_tests.gd").interaction(game, _expect)
+	preload("res://tests/first_person_upgrade_tests.gd").equipment(game, _expect)
+	preload("res://tests/first_person_upgrade_tests.gd").save_pitch(game, _expect)
+	preload("res://tests/first_person_upgrade_tests.gd").stair_feedback(game, _expect)
+	preload("res://tests/combat_navigation_tests.gd").run(game, _expect)
+	preload("res://tests/cabinet_tests.gd").run(game, _expect)
 	WorldStreamingTests.run(game, _expect)
 	_test_barrier_rendering()
 	_test_visibility_and_combat()
@@ -294,6 +301,8 @@ func _test_visibility_and_combat() -> void:
 	_expect(zombie.health == ZombieActor.MAX_HEALTH - 1, "directional melee damages same-floor target")
 	zombie.attack_cooldown = 0.0
 	var arm_health := float(game.player_state.body_health["Right Arm"])
+	zombie.facing_direction = zombie.logical_position.direction_to(game.player.logical_position)
+	zombie.look_pitch = 0.0
 	zombie._process(0.01)
 	_expect(game.player_state.body_health["Right Arm"] < arm_health and is_equal_approx(game.player_state.health, health),
 		"zombie claw damages its body region without double-charging overall health")
@@ -313,9 +322,9 @@ func _test_actions_and_inventory() -> void:
 	var point := game.interactions.nearest_point()
 	_expect(point.get("id") == "grocery_upstairs", "upper floor has its own reachable container")
 	var container: ContainerData = point["container"]
+	preload("res://tests/first_person_upgrade_tests.gd").aim_at(game, point)
 	game.interactions.request_interaction()
-	_expect(game.interactions.active_action.is_empty() and game.interactions.can_access(point["id"]), "viewing a reachable cabinet is immediate and needs no search")
-	game.interactions._start_container_search(point)
+	_expect(game.interactions.is_searching() and not game.interactions.can_access(point["id"]), "unsearched container starts timed search and keeps contents inaccessible")
 	game.interactions._update_active_action(2.0)
 	var progress := container.search_progress_seconds
 	_expect(progress > 0.0, "search progress is recorded during action")
@@ -328,7 +337,7 @@ func _test_actions_and_inventory() -> void:
 	game._unhandled_input(move)
 	_expect(game.interactions.active_action.is_empty() and not game.player.interaction_locked, "movement intent cancels search immediately")
 	game.interactions._start_container_search(point)
-	_expect(is_equal_approx(game.interactions.active_action["remaining"], 360.0 - progress), "legacy search resumes saved progress")
+	_expect(is_equal_approx(game.interactions.active_action["remaining"], container.search_duration_game_seconds - progress), "container search resumes saved progress")
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
 	game.interactions._update_active_action(5)
 	_expect(is_equal_approx(progress, container.search_progress_seconds), "pause freezes search")
@@ -336,8 +345,10 @@ func _test_actions_and_inventory() -> void:
 	game.interactions._update_active_action(1)
 	_expect(is_equal_approx(container.search_progress_seconds, progress + 72.0), "3x search advances at correct game-time rate")
 	game.interactions._update_active_action(5)
-	_expect(container.searched and not game.inventory.contents(game.inventory.default_destination()).is_empty(), "upper loot search completes and transfers supplies")
+	_expect(container.searched and container.is_open and not container.contents.is_empty(), "search completion opens container without automatically taking its contents")
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
+	game.interactions.request_batch(container.id, game.inventory.default_destination())
+	game.interactions._update_active_action(30)
 	var stack: ItemStack = game.inventory.contents(game.inventory.default_destination())[0]
 	var quantity := stack.quantity
 	game.player_state.survival.hunger = 20
@@ -353,6 +364,7 @@ func _test_actions_and_inventory() -> void:
 	_expect(game.player_state.wounds.size() == wounds + 1, "ground hazard applies one wound")
 	_place_player(Vector2(5.5, 3.5), 1)
 	game.player_state.survival.fatigue = 60.0
+	preload("res://tests/first_person_upgrade_tests.gd").aim_at(game, game.interactions.nearest_point())
 	game.interactions.request_interaction()
 	_expect(game.interactions.is_resting() and GameTime.speed_mode == GameTime.SpeedMode.SLEEP, "upstairs bed starts unified-time sleep fast-forward")
 	game.interactions.interrupt_action("Test injury")
@@ -365,6 +377,7 @@ func _test_actions_and_inventory() -> void:
 	# Known contents must remain collectible after an initially full inventory.
 	var known: ContainerData = game.interactions.points[1]["container"]
 	known.searched = true
+	known.is_open = true
 	game.inventory.contents(game.inventory.default_destination()).clear()
 	_place_player(Vector2(12.7, 6.5), 0)
 	game.interactions.request_batch(known.id, game.inventory.default_destination())
@@ -377,6 +390,7 @@ func _test_actions_and_inventory() -> void:
 	_place_player(Vector2(4.5, 7.0), 0)
 	var test_point := game.interactions.nearest_point()
 	_expect(test_point.get("id") == "test_supply_cache", "test supply cache is reachable at spawn")
+	(test_point["container"] as ContainerData).is_open = true
 	game.interactions.request_batch(test_point["id"], game.inventory.default_destination())
 	game.interactions._update_active_action(30.0)
 	var test_container: ContainerData = test_point["container"]

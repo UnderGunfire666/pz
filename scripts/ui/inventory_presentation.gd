@@ -105,7 +105,9 @@ func sources(game: MVPGameRoot, side: int) -> Array[String]:
 	elif selected in ["ground", "nearby_all"]:
 		for point in game.interactions.nearby_containers():
 			if selected == "nearby_all" or String(point["id"]).begins_with("dropped_"): result.append(point["id"])
-	else: result.append(destination(game, side))
+	else:
+		var source := destination(game, side)
+		if game.interactions.can_access(source): result.append(source)
 	return result
 
 func groups(game: MVPGameRoot, side: int) -> Array[Dictionary]:

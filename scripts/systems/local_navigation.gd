@@ -13,6 +13,8 @@ var _path_build_count := 0
 var _repath_left := 0.0
 var _blocked_seconds := 0.0
 var failure_reason := ""
+var _conservative := false
+var _exit_override := -999
 const TARGET_REPATH_DISTANCE := 0.35
 const UNREACHABLE_RETRY_SECONDS := 0.8
 const WAYPOINT_ARRIVAL_DISTANCE := 0.02
@@ -29,12 +31,23 @@ func reset() -> void:
 	_repath_left = 0.0
 	_blocked_seconds = 0.0
 	failure_reason = ""
+	_conservative = false
+	_exit_override = -999
 
 
 func advance(map: WorldMap, pos: Vector2, floor_level: int, stair_id: String,
 		target: Vector2, target_floor: int, speed: float, delta: float, target_stair: String = "") -> Dictionary:
 	_retry_left = maxf(0.0, _retry_left - delta)
 	_repath_left = maxf(0.0, _repath_left - delta)
+	if stair_id.is_empty() and not map.can_stand(pos, floor_level):
+		# A door may have closed over this actor since its previous update.
+		# Use the same local validated displacement as the player interaction.
+		for barrier: Dictionary in map.barriers.values():
+			if barrier["open"] or int(barrier["level"]) != floor_level: continue
+			var resolved := map.resolve_closed_barrier_overlap(barrier["id"], pos, floor_level, target.direction_to(pos))
+			if resolved != pos:
+				reset()
+				return {"position": resolved, "floor": floor_level, "stair_id": ""}
 	if not stair_id.is_empty() and stair_id == target_stair and map.stairs.has(stair_id):
 		# Follow the last observed point along this surface, including reversal.
 		var link: StairLink = map.stairs[stair_id]
@@ -46,14 +59,15 @@ func advance(map: WorldMap, pos: Vector2, floor_level: int, stair_id: String,
 		# A save never serializes a transient path cache. Resume to a legal landing.
 		var link: StairLink = map.stairs.get(stair_id)
 		if link != null:
-			var go_up := target_floor >= link.to_floor
+			var go_up := (_exit_override == link.to_floor) if _exit_override != -999 else target_floor >= link.to_floor
 			_path = [{"position": link.end if go_up else link.start,
 				"floor": link.to_floor if go_up else link.from_floor}]
 			_index = 0
 			_planned_floor = target_floor
 			_planned_world_revision = -1
 	if stair_id.is_empty() and (target_stair != _planned_stair or _should_repath(map, pos, floor_level, target, target_floor)):
-		_path = map.find_path(pos, floor_level, target, target_floor) if target_stair.is_empty() else map.find_path_to_stair(pos, floor_level, target, target_stair)
+		_exit_override = -999
+		_path = map.find_path(pos, floor_level, target, target_floor, not _conservative) if target_stair.is_empty() else map.find_path_to_stair(pos, floor_level, target, target_stair, not _conservative)
 		_index = 0
 		_planned_target = target
 		_planned_floor = target_floor
@@ -84,12 +98,25 @@ func advance(map: WorldMap, pos: Vector2, floor_level: int, stair_id: String,
 			var rise := (link.to_floor - link.from_floor) * map.floor_height
 			planar_speed *= link.length() / Vector2(link.length(), rise).length()
 		var motion := pos.direction_to(next) * minf(planar_speed * delta, pos.distance_to(next))
-		var result := map.move_actor(pos, floor_level, motion, stair_id)
-		if motion.length_squared() > 0.000001 and pos.distance_squared_to(result["position"]) < motion.length_squared() * 0.01:
+		# Ground waypoints must not accidentally acquire a staircase. Only the
+		# explicit vertical edge (or final mid-stair target) authorizes entry.
+		var entry := ""
+		if stair_id.is_empty() and (int(waypoint["floor"]) != floor_level or not String(waypoint.get("stair", "")).is_empty()):
+			for link: StairLink in map.query_stairs(floor_level, Rect2(pos, Vector2.ZERO).grow(0.3)):
+				if (floor_level == link.from_floor and pos.distance_to(link.start) <= 0.28) or (floor_level == link.to_floor and pos.distance_to(link.end) <= 0.28):
+					entry = link.id
+					break
+		var result := map.move_actor(pos, floor_level, motion, stair_id, WorldMap.ACTOR_RADIUS, entry)
+		var progress := pos.distance_to(next) - Vector2(result["position"]).distance_to(next)
+		if motion.length_squared() > 0.000001 and progress < motion.length() * 0.05:
 			_blocked_seconds += delta
 		else:
 			_blocked_seconds = 0.0
-		if _blocked_seconds >= 0.6 and stair_id.is_empty():
+		if _blocked_seconds >= 0.6:
+			_conservative = true
+			if not stair_id.is_empty() and map.stairs.has(stair_id):
+				var link: StairLink = map.stairs[stair_id]
+				_exit_override = link.from_floor if next.distance_to(link.end) < next.distance_to(link.start) else link.to_floor
 			_path.clear()
 			_index = 0
 			_retry_left = UNREACHABLE_RETRY_SECONDS

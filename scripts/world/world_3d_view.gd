@@ -8,6 +8,7 @@ var actor_layer: Node2D
 var interactions: InteractionSystem
 var camera: Camera3D
 var view_rig: PlayerViewRig
+var first_person_hands: FirstPersonHands
 var chunk_builder := WorldChunkBuilder.new()
 var streamer := WorldChunkStreamer.new()
 var actor_visuals: Dictionary = {}
@@ -45,6 +46,9 @@ func setup(p_world_map: WorldMap, p_player: PlayerController,
 	add_child(view_rig)
 	camera = view_rig.camera
 	camera.make_current()
+	first_person_hands = FirstPersonHands.new()
+	camera.add_child(first_person_hands)
+	first_person_hands.setup(player.state.inventory)
 	sync_view_to_player()
 	chunk_builder.setup(world_map)
 	streamer.name = "WorldChunks"
@@ -59,6 +63,7 @@ func setup(p_world_map: WorldMap, p_player: PlayerController,
 func _process(delta: float) -> void:
 	if player == null: return
 	_update_camera(delta)
+	first_person_hands.advance(delta, player)
 	streamer.advance()
 	_update_location()
 	_update_lighting()
@@ -69,6 +74,7 @@ func _process(delta: float) -> void:
 func orbit_camera(mouse_delta: Vector2) -> void:
 	view_rig.look_delta(mouse_delta)
 	player.facing_direction = view_rig.facing_direction()
+	player.look_pitch = view_rig.pitch
 	_update_camera(0.0)
 
 
@@ -78,6 +84,7 @@ func input_to_logical(screen_input: Vector2) -> Vector2:
 
 func sync_view_to_player() -> void:
 	view_rig.align_to_facing(player.facing_direction)
+	view_rig.pitch = player.look_pitch
 	_update_camera(0.0)
 
 
@@ -88,6 +95,8 @@ func _update_camera(_delta: float) -> void:
 
 func refresh_after_load() -> void:
 	sync_view_to_player()
+	first_person_hands.reset_motion()
+	first_person_hands.advance(0.0, player)
 	streamer.refresh(true)
 	streamer.flush_pending()
 	_update_location()
@@ -170,22 +179,30 @@ func _update_interaction_markers() -> void:
 	for marker: Dictionary in interaction_markers:
 		var point: Dictionary = marker["point"]
 		(marker["node"] as Node3D).visible = not (point["kind"] == "hazard" and point.get("triggered", false))
+		if point.get("furniture", false):
+			var cabinet := (marker["node"] as Node3D).get_node("Cabinet") as MeshInstance3D
+			var opened := (point["container"] as ContainerData).is_open
+			if not cabinet.has_meta("opened") or cabinet.get_meta("opened") != opened:
+				cabinet.set_meta("opened", opened)
+				cabinet.material_override = _material(ContainerData.OPEN_COLOR if opened else ContainerData.CLOSED_COLOR)
 
 func _create_interaction_marker(point: Dictionary) -> Node3D:
 	var root := Node3D.new()
 	var mesh := TorusMesh.new()
 	if point.get("furniture", false):
 		var cabinet := MeshInstance3D.new()
+		cabinet.name = "Cabinet"
 		var box := BoxMesh.new()
-		box.size = Vector3(0.5, 1.0, 0.5)
+		box.size = ContainerData.CABINET_SIZE
 		cabinet.mesh = box
 		cabinet.position.y = 0.5
-		cabinet.material_override = _material(Color("d9d9d2"))
+		cabinet.material_override = _material(ContainerData.OPEN_COLOR if (point["container"] as ContainerData).is_open else ContainerData.CLOSED_COLOR)
 		root.add_child(cabinet)
 	mesh.inner_radius = 0.27
 	mesh.outer_radius = 0.34
 	var ring := MeshInstance3D.new()
 	ring.mesh = mesh
+	ring.visible = not point.get("furniture", false)
 	ring.position.y = 0.045
 	root.add_child(ring)
 	var beacon := MeshInstance3D.new()
@@ -194,6 +211,7 @@ func _create_interaction_marker(point: Dictionary) -> Node3D:
 	beacon_mesh.bottom_radius = 0.08
 	beacon_mesh.height = 0.42
 	beacon.mesh = beacon_mesh
+	beacon.visible = not point.get("furniture", false)
 	beacon.position.y = 0.24
 	root.add_child(beacon)
 	var color := Color("6dcae8")
@@ -271,6 +289,7 @@ func _update_actors() -> void:
 
 func _actor_is_visible(node: Node2D, _actor_id: int, logical_position: Vector2,
 		_actor_floor: int, _stair_id: String) -> bool:
+	if node is SurvivorNPC and node.health <= 0: return false
 	if node == player: return true
 	# No gameplay FOV, LOS, floor slice or exploration gate. The depth buffer
 	# and camera frustum perform normal 3D occlusion for every resident actor.

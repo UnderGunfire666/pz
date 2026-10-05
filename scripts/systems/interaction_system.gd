@@ -8,7 +8,13 @@ signal light_injury_received()
 signal points_changed()
 signal container_view_requested(id: String)
 
-const SEARCH_DURATION_GAME_SECONDS := 360.0
+## Baseline real seconds at normal speed, authored independently for each container.
+const CONTAINER_SEARCH_SECONDS := {
+	"test_cabinet_0": 2.0, "test_cabinet_1": 3.0, "test_cabinet_2": 4.0,
+	"test_cabinet_3": 3.0, "wardrobe": 5.0, "backpack_crate": 4.0,
+	"test_supply_cache": 6.0, "grocery_shelf": 3.0,
+	"grocery_upstairs": 5.0, "grocery_top": 6.0, "neighbour_pantry": 3.0,
+}
 const CLOTHING_CHANGE_GAME_SECONDS := 30.0
 const CLOTHING_REPAIR_GAME_SECONDS := 60.0
 const MEDICAL_ACTION_GAME_SECONDS := 60.0
@@ -37,7 +43,9 @@ func setup(p_world_map: WorldMap, p_player: PlayerController, p_state: PlayerSta
 		_build_demo_interactions()
 	for point in points:
 		if point.has("container"):
+			(point["container"] as ContainerData).search_duration_game_seconds = float(CONTAINER_SEARCH_SECONDS.get(point["id"], 3.0)) * GameTime.GAME_SECONDS_PER_REAL_SECOND
 			inventory.world[point["id"]] = point["container"]
+	world_map.install_furniture(points)
 
 
 func _build_demo_interactions() -> void:
@@ -84,8 +92,9 @@ func _build_demo_interactions() -> void:
 			ItemStack.new(bandage, 3), ItemStack.new(disinfectant), ItemStack.new(antibiotics),
 			ItemStack.new(painkillers), ItemStack.new(splint), ItemStack.new(burn_dressing),
 			ItemStack.new(tool_case), ItemStack.new(ration, 2)])})
-	var locations := [Vector2(4.85, 6.9), Vector2(5.5, 6.7), Vector2(3.75, 5.7), Vector2(6.3, 7.0)]
-	var labels := ["Cabinet A — nearby", "Cabinet B — farther", "Cabinet C — behind wall", "Cabinet D — outside range"]
+	var locations := [Vector2(2.4, 2.7), Vector2(2.4, 3.5), Vector2(6.6, 2.7), Vector2(5.6, 11.2)]
+	var labels := ["Kitchen cabinet", "Living room cabinet", "Bedroom dresser", "Neighbour cupboard"]
+	var cabinet_floors := [0, 0, 1, 0]
 	var snack := ItemDefinition.new("cabinet_snack", "Trail snack", Vector3(4, 4, 8), 0.1, ["food"])
 	snack.hunger_restore = 24.0
 	var hammer := ItemDefinition.new("cabinet_hammer", "Hammer", Vector3(4, 4, 30), 0.8, ["weapon", "tool"])
@@ -100,7 +109,7 @@ func _build_demo_interactions() -> void:
 		cabinet.capacity = (ContainerData.CABINET_DIMENSIONS.x * ContainerData.CABINET_DIMENSIONS.y
 			* ContainerData.CABINET_DIMENSIONS.z)
 		points.insert(points.size() - 1, {"id": id, "kind": "container", "label": labels[index], "position": locations[index],
-			"floor": 0, "radius": CONTAINER_REACH, "container": cabinet, "furniture": true})
+			"floor": cabinet_floors[index], "radius": CONTAINER_REACH, "container": cabinet, "furniture": true})
 	var clothing_loot: Array[ItemStack] = []
 	clothing_loot.append(ItemStack.new(ItemDefinition.clothing("shirt", "Cotton shirt", "inner_top",
 		["Torso", "Left Arm", "Right Arm"], {"Torso": 15, "Left Arm": 10, "Right Arm": 10},
@@ -131,9 +140,9 @@ func _build_demo_interactions() -> void:
 	var flashlight := ItemDefinition.new("flashlight", "Flashlight", Vector3(4, 4, 18), 0.3, ["equipment", "tool"])
 	flashlight.switchable = true
 	clothing_loot.append_array([ItemStack.new(needle), ItemStack.new(thread), ItemStack.new(ClothingSystem.rag_definition(), 3), ItemStack.new(flashlight)])
-	points.insert(points.size() - 1, {"id": "wardrobe", "kind": "container", "label": "Test wardrobe",
-		"position": Vector2(4.65, 6.9), "floor": 0, "radius": CONTAINER_REACH,
-		"container": ContainerData.new("wardrobe", "Test wardrobe", clothing_loot), "furniture": true})
+	points.insert(points.size() - 1, {"id": "wardrobe", "kind": "container", "label": "Bedroom wardrobe",
+		"position": Vector2(2.4, 2.7), "floor": 1, "radius": CONTAINER_REACH,
+		"container": ContainerData.new("wardrobe", "Bedroom wardrobe", clothing_loot), "furniture": true})
 
 
 func _container_point(id: String, label: String, pos: Vector2, floor: int,
@@ -160,8 +169,12 @@ func _process(delta: float) -> void:
 
 func request_interaction() -> void:
 	if player_state.is_dead(): return
-	var barrier := world_map.nearest_barrier(player.logical_position, player.floor_level)
-	if not barrier.is_empty():
+	var target := PlayerTargeting.interaction_target(self)
+	if target.is_empty() or not target["reachable"]:
+		notification_requested.emit("Look at a reachable door, window, container or bed." if target.is_empty() else String(target["reason"]))
+		return
+	if target["kind"] == "barrier":
+		var barrier: Dictionary = target["data"]
 		var open := not bool(barrier["open"])
 		if world_map.set_barrier_open(barrier["id"], open):
 			var sound_position: Vector2 = (Vector2(barrier["start"]) + Vector2(barrier["end"])) * 0.5
@@ -175,13 +188,23 @@ func request_interaction() -> void:
 				player.stair_id = ""
 			notification_requested.emit("%s %s." % ["Door" if barrier["kind"] == "door" else "Window", "opened" if open else "closed"])
 		return
-	var point := nearest_point()
+	var point: Dictionary = target["data"]
 	if point.is_empty():
 		notification_requested.emit("No reachable interaction on this floor.")
 		return
 	match String(point["kind"]):
 		"container":
-			container_view_requested.emit(point["id"])
+			var container: ContainerData = point["container"]
+			if not String(point["id"]).begins_with("dropped_") and not container.is_open and not container.searched:
+				if is_searching() and active_action["payload"]["id"] == point["id"]: return
+				if not _pack_ready(): return
+				_start_container_search(point)
+				return
+			if not String(point["id"]).begins_with("dropped_"):
+				container.is_open = not container.is_open
+				inventory.revision += 1
+			if container.is_open or String(point["id"]).begins_with("dropped_"):
+				container_view_requested.emit(point["id"])
 		"bed":
 			if not _pack_ready(): return
 			if player_state.survival.fatigue >= StatusConfig.SLEEP_FATIGUE_THRESHOLD:
@@ -200,6 +223,12 @@ func request_sorting() -> void:
 
 
 func _reachable(point: Dictionary) -> bool:
+	if point.has("container"):
+		var eye := ActorPerception.point(world_map, player.logical_position, player.floor_level, player.stair_id, ActorPerception.EYE_HEIGHT)
+		var bounds := PlayerTargeting.point_bounds(world_map, point)
+		var direction := eye.direction_to(bounds.get_center())
+		var hit := PlayerTargeting.ray_box(eye, direction, bounds, INF)
+		if not world_map.has_spatial_line_of_sight(eye, eye + direction * maxf(0, hit - 0.02)): return false
 	var target_tile := world_map.get_tile(point["position"], int(point["floor"]))
 	var player_tile := world_map.get_tile(player.logical_position, player.floor_level)
 	if target_tile != null and not target_tile.room_id.is_empty():
@@ -224,17 +253,26 @@ func nearest_point() -> Dictionary:
 	return closest
 
 
-func prompt() -> String:
+func prompt(target: Variant = null) -> String:
 	if not active_action.is_empty():
+		if is_searching():
+			var seconds := float(active_action["remaining"]) / GameTime.GAME_SECONDS_PER_REAL_SECOND / player_state.action_efficiency("search")
+			return "%s  %d%% · %.1f s at 1x · move / aim / Esc to cancel" % [active_action["label"], int(action_progress() * 100.0), seconds]
 		return "%s  %d%% · move / aim / Esc to cancel" % [active_action["label"], int(action_progress() * 100.0)]
-	var barrier := world_map.nearest_barrier(player.logical_position, player.floor_level)
-	if not barrier.is_empty():
-		return "[E] %s %s" % ["Close" if barrier["open"] else "Open", "door" if barrier["kind"] == "door" else "window"]
-	var point := nearest_point()
-	if point.is_empty():
-		return ""
+	if target == null: target = PlayerTargeting.interaction_target(self)
+	if target.is_empty(): return ""
+	if target["kind"] == "blocked": return "View blocked"
+	var point: Dictionary = target["data"]
+	var label := String(point.get("label", point["kind"].capitalize()))
+	if not target["reachable"]: return "%s · %s" % [label, target["reason"]]
+	if target["kind"] == "barrier":
+		return "[E] %s %s" % ["Close" if point["open"] else "Open", point["kind"]]
 	if point["kind"] == "container":
-		return "[E / Tab] View %s" % point["label"]
+		var container: ContainerData = point["container"]
+		if not String(point["id"]).begins_with("dropped_") and not container.is_open and not container.searched:
+			var remaining := maxf(0, container.search_duration_game_seconds - container.search_progress_seconds)
+			return "[E] Search %s (%.1f s at 1x)" % [point["label"], remaining / GameTime.GAME_SECONDS_PER_REAL_SECOND / player_state.action_efficiency("search")]
+		return "[E] %s %s" % ["View" if String(point["id"]).begins_with("dropped_") else ("Close" if (point["container"] as ContainerData).is_open else "Open"), point["label"]]
 	return "[E] Sleep · %s" % point["label"]
 
 
@@ -278,11 +316,17 @@ func _store_search_progress() -> void:
 func _start_container_search(point: Dictionary) -> void:
 	var container: ContainerData = point["container"]
 	if container.searched:
-		_collect_contents(container)
+		_open_searched_container(container)
 		return
-	_start_action("search", "Searching %s" % container.display_name, SEARCH_DURATION_GAME_SECONDS,
-		point, maxf(0.0, SEARCH_DURATION_GAME_SECONDS - container.search_progress_seconds))
+	_start_action("search", "Searching %s" % container.display_name, container.search_duration_game_seconds,
+		point, maxf(0.0, container.search_duration_game_seconds - container.search_progress_seconds))
 	NoiseBus.emit_actor_noise(player, 2.5, "searching")
+
+
+func _open_searched_container(container: ContainerData) -> void:
+	container.is_open = true
+	inventory.revision += 1
+	container_view_requested.emit(container.id)
 
 
 func _start_action(kind: String, label: String, duration: float, payload: Dictionary,
@@ -339,8 +383,8 @@ func _complete_action(action: Dictionary) -> void:
 		"search":
 			var container: ContainerData = action["payload"]["container"]
 			container.searched = true
-			container.search_progress_seconds = SEARCH_DURATION_GAME_SECONDS
-			_collect_contents(container)
+			container.search_progress_seconds = container.search_duration_game_seconds
+			_open_searched_container(container)
 		"sleep":
 			_restore_pre_sleep_speed()
 			rest_completed.emit()
@@ -348,10 +392,6 @@ func _complete_action(action: Dictionary) -> void:
 		"sort":
 			inventory.sort_items()
 			notification_requested.emit("Inventory sorted.")
-
-
-func _collect_contents(container: ContainerData) -> void:
-	request_batch(container.id, inventory.default_destination())
 
 
 func _check_hazards() -> void:
@@ -385,7 +425,7 @@ func _container_contents_label(container: ContainerData) -> String:
 
 
 func action_progress_for(container: ContainerData) -> float:
-	return clampf(container.search_progress_seconds / SEARCH_DURATION_GAME_SECONDS, 0.0, 1.0)
+	return clampf(container.search_progress_seconds / container.search_duration_game_seconds, 0.0, 1.0)
 
 
 func can_access(id: String) -> bool:
@@ -393,7 +433,7 @@ func can_access(id: String) -> bool:
 	if inventory.world.has(id):
 		for point in points:
 			if point["id"] == id:
-				return _reachable(point)
+				return _reachable(point) and _contents_available(point)
 		return false
 	var found := inventory.find_unit(id)
 	return not found.is_empty() and can_access(found["owner"])
@@ -472,7 +512,7 @@ func request_pickup(uid: String) -> void:
 func nearby_containers() -> Array[Dictionary]:
 	var nearby: Array[Dictionary] = []
 	for point in points:
-		if point.has("container") and _reachable(point): nearby.append(point)
+		if point.has("container") and _reachable(point) and _contents_available(point): nearby.append(point)
 	nearby.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var ag := String(a["id"]).begins_with("dropped_")
 		var bg := String(b["id"]).begins_with("dropped_")
@@ -483,6 +523,12 @@ func nearby_containers() -> Array[Dictionary]:
 		if a["label"] != b["label"]: return a["label"] < b["label"]
 		return a["id"] < b["id"])
 	return nearby
+
+
+func _contents_available(point: Dictionary) -> bool:
+	if String(point["id"]).begins_with("dropped_"):
+		return player.logical_position.distance_to(point["position"]) <= 0.65
+	return (point["container"] as ContainerData).is_open
 
 
 func _ground_container() -> String:

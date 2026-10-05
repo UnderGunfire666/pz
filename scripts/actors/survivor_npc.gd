@@ -13,6 +13,9 @@ var logical_position := Vector2.ZERO
 var floor_level := 0
 var stair_id := ""
 var facing_direction := Vector2.DOWN
+var look_pitch := 0.0
+var health := 100.0
+var attack_cooldown := 0.0
 var threat_memory_until := 0.0
 var threat_memory_position := Vector2.ZERO
 var survival := SurvivalSystem.new()
@@ -60,7 +63,7 @@ func setup_interactions(p_interactions: InteractionSystem) -> void:
 
 
 func _process(delta: float) -> void:
-	if world_map == null:
+	if world_map == null or health <= 0:
 		return
 	if player != null and logical_position.distance_squared_to(player.logical_position) > 100.0:
 		_logic_tick_elapsed += delta
@@ -74,6 +77,8 @@ func _process(delta: float) -> void:
 	if simulation_scale <= 0.0:
 		return
 	var scaled_delta := delta * simulation_scale
+	attack_cooldown = maxf(0.0, attack_cooldown - scaled_delta)
+	var defended := _defend(scaled_delta)
 	var game_seconds := scaled_delta * GameTime.GAME_SECONDS_PER_REAL_SECOND
 	decision_cooldown -= scaled_delta
 	if decision_cooldown <= 0.0:
@@ -82,6 +87,7 @@ func _process(delta: float) -> void:
 		_choose_goal()
 	var resting := brain.current_goal == NPCBrain.Goal.REST and _at_target()
 	survival.advance(game_seconds, 0.0 if _at_target() else 0.15, resting)
+	if defended: return
 	if _at_target():
 		_perform_goal(game_seconds)
 	else:
@@ -118,7 +124,7 @@ func _choose_goal() -> void:
 			var tag := "water" if brain.current_goal == NPCBrain.Goal.DRINK else "food"
 			next_resource = _find_resource(tag, nearest_zombie)
 			if not next_resource.is_empty():
-				next_position = next_resource["position"]
+				next_position = world_map.furniture_approach(next_resource["position"], int(next_resource.get("floor", 0)), logical_position)
 				next_floor = int(next_resource.get("floor", 0))
 			else:
 				brain.current_goal = NPCBrain.Goal.REST
@@ -192,6 +198,7 @@ func _find_resource(tag: String, visible_threat: ZombieActor) -> Dictionary:
 			continue
 		var point_position: Vector2 = point["position"]
 		var point_floor := int(point.get("floor", 0))
+		point_position = world_map.furniture_approach(point_position, point_floor, logical_position)
 		var route := world_map.find_path(logical_position, floor_level, point_position, point_floor)
 		if route.is_empty() and (floor_level != point_floor or logical_position.distance_to(point_position) > 0.2):
 			continue
@@ -282,16 +289,18 @@ func _move_toward_target(scaled_delta: float) -> void:
 			NoiseBus.emit_actor_noise(self, 2.2, "footsteps", 1.0, 0.12)
 
 
-func _nearest_zombie() -> ZombieActor:
+func _nearest_zombie(max_range: float = 4.5) -> ZombieActor:
 	var nearest: ZombieActor = null
 	var nearest_distance := INF
 	for actor in get_tree().get_nodes_in_group("zombies"):
 		var zombie := actor as ZombieActor
 		if zombie == null or zombie.health <= 0 or zombie.is_queued_for_deletion():
 			continue
+		if zombie.world_map != world_map: continue
 		var distance := ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.0).distance_to(
 			ActorPerception.point(world_map, zombie.logical_position, zombie.floor_level, zombie.stair_id, 0.0))
 		var visual_range := 4.5 * lerpf(0.55, 1.0, world_map.ambient_light())
+		if distance > max_range: continue
 		if distance < nearest_distance and ActorPerception.sees_actor(world_map, self, zombie, visual_range):
 			nearest = zombie
 			nearest_distance = distance
@@ -299,7 +308,7 @@ func _nearest_zombie() -> ZombieActor:
 
 
 func hear_noise(stimulus: NoiseStimulus) -> void:
-	if world_map == null or is_queued_for_deletion() or GameTime.simulation_scale() <= 0.0: return
+	if world_map == null or health <= 0 or is_queued_for_deletion() or GameTime.simulation_scale() <= 0.0: return
 	if stimulus == null or stimulus.world_time < brain.last_noise_time: return
 	var now := GameTime.elapsed_game_seconds
 	var heard := ActorHearing.sample(world_map, self, stimulus, now)
@@ -328,3 +337,23 @@ func hear_noise(stimulus: NoiseStimulus) -> void:
 	elif brain.current_goal != NPCBrain.Goal.FLEE:
 		var direction := logical_position.direction_to(brain.last_noise_position)
 		if not direction.is_zero_approx(): facing_direction = direction
+
+
+func _defend(delta: float) -> bool:
+	var threat := _nearest_zombie(ActorCombat.NPC_REACH + 0.3)
+	if threat == null: return false
+	var target := ActorPerception.point(world_map, threat.logical_position, threat.floor_level, threat.stair_id, ActorPerception.CHEST_HEIGHT)
+	var eye := ActorPerception.point(world_map, logical_position, floor_level, stair_id, ActorPerception.EYE_HEIGHT)
+	if eye.distance_to(target) > ActorCombat.NPC_REACH: return false
+	ActorCombat.turn_toward(self, target, delta)
+	if attack_cooldown > 0.0 or ActorCombat.contact(self, threat, ActorCombat.direction(self), ActorCombat.NPC_REACH).is_empty(): return false
+	attack_cooldown = 1.2
+	threat.take_damage(1)
+	NoiseBus.emit_actor_noise(self, 3.0, "struggle")
+	_search_progress = 0.0
+	return true
+
+
+func take_damage(amount: float) -> void:
+	health = maxf(0.0, health - maxf(0.0, amount))
+	cancel_current_task()

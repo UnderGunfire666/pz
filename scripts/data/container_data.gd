@@ -3,6 +3,10 @@ extends RefCounted
 
 ## Furniture capacity is volume only; ground piles are unbounded.
 const CABINET_DIMENSIONS := Vector3(50, 50, 100)
+const CABINET_SIZE := Vector3(0.5, 1.0, 0.5)
+const CLOSED_COLOR := Color("a7adb4")
+const OPEN_COLOR := Color("70b98b")
+var is_open := false
 var capacity := INF
 var id: String
 var display_name: String
@@ -10,6 +14,8 @@ var contents: Array[ItemStack] = []
 var searched: bool = false
 var claimed_by: String = ""
 var search_progress_seconds := 0.0
+## Simulation seconds; 72 equals 3 real seconds at normal game speed.
+var search_duration_game_seconds := 72.0
 
 
 func _init(p_id: String, p_display_name: String, p_contents: Array[ItemStack] = []) -> void:

@@ -38,7 +38,9 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	actions.interrupt_action()
 	for root in InventoryGrid.ROOTS: game.inventory.contents(root).clear()
 	game.inventory.use_context = {}
-	game.player.logical_position = Vector2(4.45, 6.65)
+	game.player.logical_position = Vector2(3.1, 3.0)
+	game.inventory.world["test_cabinet_0"].is_open = true
+	game.inventory.world["test_cabinet_1"].is_open = true
 	game.player.floor_level = 0
 	game.player.stair_id = ""
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
