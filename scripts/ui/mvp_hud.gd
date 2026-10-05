@@ -104,7 +104,7 @@ func _ready() -> void:
 	help_panel.offset_top = 90
 	help_panel.visible = false
 	help_label = _label(help_panel, 14)
-	help_label.text = ("Mouse look · WASD move/strafe · Shift sprint\nRMB aim · LMB attack · E interact · Tab inventory · C character\nF eat · V drink · R sort\nEsc close panel / release cursor and cancel action\nClick the world to resume mouse look. No camera zoom.\nSpace pause · 1 normal · 2 fast-forward\nWalk into a stair landing to go up/down.\nF5 quick save · F9 load (paused)\nAfter death: Enter starts a new run.")
+	help_label.text = ("Mouse look · WASD move/strafe · Shift sprint\nRMB aim · LMB attack · E interact · Tab inventory · C character\nF eat · V drink · R sort\nEsc close panel / release cursor and cancel action\nClick the world to resume mouse look. Third-person camera has no zoom.\nSpace pause · 1 normal · 2 fast-forward\nWalk into a stair landing to go up/down.\nF5 quick save · F9 load (paused)\nAfter death: Enter starts a new run.")
 
 	var bottom := _panel(root)
 	bottom.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)

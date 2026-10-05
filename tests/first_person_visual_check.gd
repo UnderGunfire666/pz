@@ -17,12 +17,17 @@ func _ready() -> void:
 	game.world_3d_view.refresh_after_load()
 	for frame in 4: await get_tree().process_frame
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("res://.godot/first-person-idle.png")
+	get_viewport().get_texture().get_image().save_png("res://.godot/third-person-idle.png")
 	game.player._attack_flash_left = 0.09
-	game.world_3d_view.first_person_hands.advance(0, game.player)
+	game.world_3d_view.third_person_equipment.advance(0, game.player)
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("res://.godot/first-person-strike.png")
+	get_viewport().get_texture().get_image().save_png("res://.godot/third-person-strike.png")
 	game.player._attack_flash_left = 0.0
+	game.player.look_pitch = -1.35
+	game.world_3d_view.sync_view_to_player()
+	game.world_3d_view._process(0.0)
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("res://.godot/third-person-full-body.png")
 	game.player.logical_position = Vector2(3.2, 2.7)
 	for point: Dictionary in game.interactions.points:
 		if point["id"] == "test_cabinet_0":
@@ -30,7 +35,7 @@ func _ready() -> void:
 	game.world_3d_view.refresh_after_load()
 	game.hud.refresh(game)
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("res://.godot/first-person-focus.png")
+	get_viewport().get_texture().get_image().save_png("res://.godot/third-person-focus.png")
 	game.interactions.request_interaction()
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	game.interactions.request_interaction()
@@ -41,8 +46,15 @@ func _ready() -> void:
 	game.hud.refresh(game)
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png("res://.godot/cabinet-open.png")
-	print("First-person visual captures saved.")
+	print("Third-person visual captures saved.")
 	_measure_target_queries(game)
+	var pose_samples: Array[float] = []
+	for sample in 120:
+		var started := Time.get_ticks_usec()
+		game.world_3d_view.third_person_equipment.advance(0.0, game.player)
+		pose_samples.append(float(Time.get_ticks_usec() - started) / 1000.0)
+	pose_samples.sort()
+	print("Full body pose + grips CPU: median %.3f ms, p95 %.3f ms" % [pose_samples[60], pose_samples[114]])
 	get_tree().quit()
 
 

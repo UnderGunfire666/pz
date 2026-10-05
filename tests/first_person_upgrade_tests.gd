@@ -110,17 +110,20 @@ static func equipment(game: MVPGameRoot, check: Callable) -> void:
 	var visual := FirstPersonHands.new()
 	game.world_3d_view.camera.add_child(visual)
 	visual.setup(inventory)
-	check.call(visual.hands.size() == 2 and visual.held_ids == ["", ""], "first-person view has two empty hands")
+	check.call(visual.hands.size() == 2 and visual.held_ids == ["", ""], "third-person equipment has two empty hand anchors")
 	var hammer := ItemDefinition.new("test_hammer", "Hammer", Vector3(4, 4, 30), 0.8, ["weapon"])
 	inventory.contents("right_hand").append(ItemStack.new(hammer))
 	inventory.revision += 1
 	visual.advance(0, game.player)
-	check.call(visual.held_ids[1] == "test_hammer" and visual.hands[1].get_child_count() == 4, "equipped hammer creates handle and head in the correct hand")
-	var idle := visual.hands[1].position
-	game.player._attack_flash_left = 0.09
+	check.call(visual.held_ids[1] == "test_hammer" and visual.hands[1].get_child_count() == 2, "equipped hammer creates only handle and head, with no proxy hand meshes")
+	var body: MixamoCharacterVisual = game.world_3d_view.actor_visuals[game.player.get_instance_id()]["character_model"]
+	visual.bind_body(body)
+	body.play_animation("attack", 0.0, 1.0, true)
+	body.animation_player.advance(0.1)
 	visual.advance(0, game.player)
-	check.call(visual.hands[1].position.z < idle.z, "weapon strike produces visible forward motion")
-	game.player._attack_flash_left = 0
+	var hand_index := MixamoCharacterVisual.bone(body.skeleton, "RightHand")
+	var wrist := body.skeleton.global_transform * body.skeleton.get_bone_global_pose(hand_index).origin
+	check.call(visual.hands[1].global_position.distance_to(wrist) < 0.002, "weapon follows the animated wrist during a full-body strike")
 	inventory.contents("right_hand").clear()
 	inventory.contents("two_hands").append(ItemStack.new(hammer))
 	inventory.revision += 1
@@ -129,17 +132,19 @@ static func equipment(game: MVPGameRoot, check: Callable) -> void:
 	inventory.contents("two_hands").clear()
 	inventory.revision += 1
 	visual.refresh()
-	check.call(visual.held_ids == ["", ""] and visual.hands[1].get_child_count() == 2, "unequipping removes held geometry")
+	check.call(visual.held_ids == ["", ""] and visual.hands[1].get_child_count() == 0, "unequipping leaves empty grip anchors without proxy limbs")
 	var jacket: ItemStack = game.inventory.world["wardrobe"].contents[1]
 	inventory.contents("outer_top").append(jacket)
 	inventory.revision += 1
 	visual.refresh()
-	check.call(visual.sleeve_color == Color("52616b"), "worn outer clothing changes first-person sleeves")
+	check.call(visual.sleeve_color == Color("52616b"), "worn outer clothing updates third-person equipment styling")
 	visual.hurt_remaining = 0.3
 	var speed := GameTime.speed_mode
 	GameTime.set_speed(GameTime.SpeedMode.PAUSED)
 	visual.advance(1, game.player)
-	check.call(is_equal_approx(visual.hurt_remaining, 0.3) and visual.hands[1].rotation.z > 0, "injury feedback is visible and remains frozen while paused")
+	body.set_region_flash("Torso", visual.hurt_remaining)
+	check.call(is_equal_approx(visual.hurt_remaining, 0.3) and body._region_flash_meshes["Torso"].visible,
+		"injury feedback highlights the hit body part and remains frozen while paused")
 	GameTime.set_speed(speed)
 	visual.free()
 
@@ -173,7 +178,7 @@ static func stair_feedback(game: MVPGameRoot, check: Callable) -> void:
 	var saved_floor := player.floor_level
 	var saved_stair := player.stair_id
 	var speed := GameTime.speed_mode
-	var hands := game.world_3d_view.first_person_hands
+	var hands := game.world_3d_view.third_person_equipment
 	var link: StairLink = game.world_map.stairs.values()[0]
 	player.floor_level = link.from_floor
 	player.stair_id = link.id
@@ -197,7 +202,7 @@ static func stair_feedback(game: MVPGameRoot, check: Callable) -> void:
 	check.call(hands._walk_blend == 0, "stopping on stairs settles hands without continuous bobbing")
 	game.world_3d_view._update_camera(0.1)
 	var expected := ActorPerception.point(game.world_map, player.logical_position, player.floor_level, player.stair_id, ActorPerception.EYE_HEIGHT)
-	check.call(game.world_3d_view.camera.global_position.is_equal_approx(expected), "stair feedback preserves exact camera and simulation eye alignment")
+	check.call(game.world_3d_view.view_rig.global_position.is_equal_approx(expected), "stair feedback preserves exact third-person pivot and simulation eye alignment")
 	hands.reset_motion()
 	check.call(hands._walk_blend == 0 and hands._walk_phase == 0, "load reset clears previous locomotion feedback")
 	player.logical_position = saved_position

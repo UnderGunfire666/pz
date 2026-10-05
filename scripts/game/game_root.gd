@@ -14,6 +14,7 @@ var zombie_spawner: ZombieSpawner
 var npc: SurvivorNPC
 var interactions: InteractionSystem
 var hud: MVPHud
+var combat_feedback: CombatFeedback
 
 var milestones := {
 	"safehouse": false,
@@ -66,10 +67,12 @@ func _ready() -> void:
 	player = PlayerController.new()
 	player_state.setup_character(character_catalog)
 	player_state.setup_inventory(inventory)
+	inventory.contents("two_hands").append(ItemStack.new(ItemDefinition.baseball_bat()))
+	inventory.revision += 1
 	player.name = "Player"
 	actor_layer.add_child(player)
 	player.setup(world_map, player_state, world_map.definition.player_spawn)
-	player.attack_requested.connect(_on_player_attack)
+	player.attack_impact_requested.connect(_on_player_attack)
 	_startup_mark("Player + character data")
 
 	interactions = InteractionSystem.new()
@@ -104,6 +107,9 @@ func _ready() -> void:
 	add_child(world_3d_view)
 	world_3d_view.setup(world_map, player, actor_layer, interactions)
 	camera = world_3d_view.camera
+	combat_feedback = CombatFeedback.new()
+	combat_feedback.name = "CombatFeedback"
+	add_child(combat_feedback)
 	_startup_mark("3D chunks + rendering")
 
 	hud = MVPHud.new()
@@ -199,6 +205,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		if not event.pressed:
+			if event.button_index == MOUSE_BUTTON_RIGHT:
+				# Input events arrive before the next controller tick; clear the visual
+				# stance now so releasing RMB never leaves a one-frame layer overlay.
+				player.aim_mode = false
 			return
 		if not player.controls_enabled:
 			if event.button_index == MOUSE_BUTTON_LEFT and not hud.has_open_panel() and not player_state.is_dead():
@@ -207,6 +217,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
+			if not player.aim_mode:
+				return
 			interactions.interrupt_action()
 			var switchable := inventory.held_switchable()
 			if player.aim_mode and not switchable.is_empty() and inventory.held_weapon() == null:
@@ -266,24 +278,40 @@ func _on_player_attack(_attack_position: Vector2, direction: Vector2) -> void:
 	if player_state.is_dead() or GameTime.simulation_scale() <= 0.0:
 		return
 	var hit_anything := false
-	var reach := ActorCombat.WEAPON_REACH if inventory.held_weapon() != null else ActorCombat.PLAYER_REACH
-	var nearest := PlayerTargeting.melee_target(player, zombie_spawner.active_zombies, player.look_direction(direction), reach)
+	var weapon := inventory.held_weapon()
+	var reach := ActorCombat.WEAPON_REACH if weapon != null else ActorCombat.PLAYER_REACH
+	var nearest: ZombieActor = null
+	var hit: Dictionary = {}
+	if weapon != null and weapon.definition.weapon_hitbox_size != Vector3.ZERO:
+		var weapon_result := ActorCombat.select_weapon_target(player, zombie_spawner.active_zombies,
+			player.look_direction(direction), weapon.definition.weapon_hitbox_size)
+		nearest = weapon_result.get("target") as ZombieActor
+		hit = weapon_result.get("hit", {})
+	else:
+		nearest = PlayerTargeting.melee_target(player, zombie_spawner.active_zombies, player.look_direction(direction), reach)
+		if nearest != null: hit = ActorCombat.contact(player, nearest, player.look_direction(direction), reach)
 	if nearest != null:
-		nearest.take_damage(inventory.attack_damage())
+		if hit.is_empty(): return
+		nearest.receive_hit(inventory.attack_damage(), hit["region"])
 		if inventory.held_weapon() == null and nearest.health > 0:
 			var shoved := world_map.move_actor(nearest.logical_position, nearest.floor_level, direction.normalized() * 0.3, nearest.stair_id)
 			nearest.logical_position = shoved["position"]
 			nearest.floor_level = shoved["floor"]
 			nearest.stair_id = shoved["stair_id"]
+		elif nearest.health > 0:
+			ActorCombat.apply_hit_recoil(nearest, direction, 0.22)
 		hit_anything = true
 	if hit_anything:
-		show_notification("%s hit." % inventory.attack_type().capitalize())
+		if weapon != null:
+			combat_feedback.play_bat_impact()
+			world_3d_view.play_hit_camera_shake()
+		show_notification("%s hit: %s." % [inventory.attack_type().capitalize(), nearest.last_hit_region])
 	else:
 		show_notification("You swing into open space. The noise still carries.")
 
 
 func _on_player_attacked(_world_position: Vector2) -> void:
-	world_3d_view.first_person_hands.hurt_remaining = 0.3
+	world_3d_view.third_person_equipment.hurt_remaining = 0.3
 	interactions.interrupt_action("Injured")
 	milestones["injury"] = true
 	if not player_state.is_dead():

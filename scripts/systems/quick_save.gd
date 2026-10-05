@@ -3,8 +3,9 @@ extends RefCounted
 
 ## A single versioned local slot. Only primitive Variant data is decoded.
 ## Pack steps resume from saved progress; other actions stop with search progress retained.
-const VERSION := 10
-const PATH := "user://afterlight_mvp_v10.save"
+const VERSION := 11
+const PATH := "user://afterlight_mvp_v11.save"
+const LEGACY_PATH_V10 := "user://afterlight_mvp_v10.save"
 const LEGACY_PATH_V9 := "user://afterlight_mvp_v9.save"
 const LEGACY_PATH_V8 := "user://afterlight_mvp_v8.save"
 const LEGACY_PATH_V7 := "user://afterlight_mvp_v7.save"
@@ -43,7 +44,8 @@ static func save_game(game: MVPGameRoot, path: String = PATH) -> bool:
 
 static func load_game(game: MVPGameRoot, path: String = PATH) -> bool:
 	if path == PATH and not FileAccess.file_exists(path):
-		if FileAccess.file_exists(LEGACY_PATH_V9): path = LEGACY_PATH_V9
+		if FileAccess.file_exists(LEGACY_PATH_V10): path = LEGACY_PATH_V10
+		elif FileAccess.file_exists(LEGACY_PATH_V9): path = LEGACY_PATH_V9
 		elif FileAccess.file_exists(LEGACY_PATH_V8): path = LEGACY_PATH_V8
 		elif FileAccess.file_exists(LEGACY_PATH_V7): path = LEGACY_PATH_V7
 		elif FileAccess.file_exists(LEGACY_PATH): path = LEGACY_PATH
@@ -89,13 +91,14 @@ static func snapshot(game: MVPGameRoot) -> Dictionary:
 		if not is_instance_valid(zombie) or zombie.health <= 0 or zombie.is_queued_for_deletion():
 			continue
 		var entry := _actor_data(zombie)
-		entry.merge({"health": zombie.health, "target": zombie.target_position,
+		entry.merge({"health": zombie.health, "body_health": zombie.body_health.duplicate(true), "target": zombie.target_position,
 			"target_floor": zombie.target_floor, "has_target": zombie.has_target,
 			"cooldown": zombie.attack_cooldown, "perception": zombie.perception_save_data()})
 		zombies.append(entry)
 	var npc_data := _actor_data(game.npc)
 	npc_data["facing"] = game.npc.facing_direction
 	npc_data["health"] = game.npc.health
+	npc_data["body_health"] = game.npc.body_health.duplicate(true)
 	npc_data["attack_cooldown"] = game.npc.attack_cooldown
 	npc_data["look_pitch"] = game.npc.look_pitch
 	npc_data["threat_memory_until"] = game.npc.threat_memory_until
@@ -134,6 +137,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if data.get("version") == 7: data = _migrate_v7(data)
 	if data.get("version") == 8: data = _migrate_v8(data)
 	if data.get("version") == 9: data = _migrate_v9(data)
+	if data.get("version") == 10: data = _migrate_v10(data)
 	data = _migrate_cabinet_layout(data, game.world_map)
 	if not data.get("cabinet_layout") is int or data["cabinet_layout"] != 1: return false
 	if not _compatible_map_identity(data.get("map_identity"), map_identity(game.world_map.definition)):
@@ -150,6 +154,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if not _valid_barrier_states(data["barriers"], game.world_map): return false
 	if not _valid_actor(data["npc"], game.world_map) or not data["npc"].get("brain") is Dictionary or not data["npc"].get("known_containers") is Array:
 		return false
+	if data["npc"].has("body_health") and not ActorBody.valid_health(data["npc"]["body_health"]): return false
 	if not _valid_survival(data["survival"]) or not _valid_survival(data["npc"].get("survival")):
 		return false
 	for key in ["facing", "threat_memory_position"]:
@@ -203,6 +208,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		if entry["health"] <= 0 or entry["health"] > ZombieActor.MAX_HEALTH:
 			return false
 		if not _valid_zombie_perception(entry["perception"]): return false
+		if not ActorBody.valid_health(entry.get("body_health")): return false
 		if not entry["target"].is_finite(): return false
 		var target_stair: String = entry["perception"].get("target_stair_id", "")
 		if not target_stair.is_empty() and not _valid_actor({"position": entry["target"],
@@ -279,6 +285,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	if data.get("version") == 7: data = _migrate_v7(data)
 	if data.get("version") == 8: data = _migrate_v8(data)
 	if data.get("version") == 9: data = _migrate_v9(data)
+	if data.get("version") == 10: data = _migrate_v10(data)
 	data = _migrate_cabinet_layout(data, game.world_map)
 	if not validate(data, game): return
 	game.interactions.interrupt_action("Loading")
@@ -289,7 +296,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	_restore_actor(game.player, data["player"])
 	game.player.facing_direction = data["facing"]
 	game.player.look_pitch = float(data.get("look_pitch", 0.0))
-	game.world_3d_view.first_person_hands.hurt_remaining = 0.0
+	game.world_3d_view.third_person_equipment.hurt_remaining = 0.0
 	game.world_3d_view.sync_view_to_player()
 	game.player._attack_cooldown_left = PlayerController.ATTACK_COOLDOWN
 	game.player._attack_flash_left = 0.0
@@ -343,6 +350,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 			continue
 		_restore_actor(zombie, entry)
 		zombie.health = entry["health"]
+		zombie.body_health = entry["body_health"].duplicate(true)
 		zombie.target_position = entry["target"]
 		zombie.target_floor = entry["target_floor"]
 		zombie.has_target = entry["has_target"]
@@ -354,6 +362,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.zombie_spawner.migration_game_seconds = data["population"]["migration_elapsed"]
 	_restore_actor(game.npc, data["npc"])
 	game.npc.health = float(data["npc"].get("health", 100.0))
+	game.npc.body_health = data["npc"].get("body_health", ActorBody.healthy_regions()).duplicate(true)
 	game.npc.attack_cooldown = float(data["npc"].get("attack_cooldown", 0.0))
 	game.npc.look_pitch = float(data["npc"].get("look_pitch", 0.0))
 	game.npc.facing_direction = data["npc"].get("facing", Vector2.DOWN)
@@ -578,8 +587,19 @@ static func _migrate_v9(source: Dictionary) -> Dictionary:
 	# Migration only changes a copy in memory. Legacy slot files remain intact;
 	# subsequent default saves use the separate v10 path.
 	var data := source.duplicate(true)
-	data["version"] = VERSION
+	data["version"] = 10
 	data.erase("seen")
+	return data
+
+static func _migrate_v10(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = VERSION
+	# Old saves did not record wound locations on zombies. Preserve their total
+	# health without inventing a historical injury location. Source stays intact.
+	if data.get("zombies") is Array:
+		for entry in data["zombies"]:
+			if entry is Dictionary and not entry.has("body_health"):
+				entry["body_health"] = ActorBody.healthy_regions()
 	return data
 
 static func _valid_zombie_perception(data: Variant) -> bool:

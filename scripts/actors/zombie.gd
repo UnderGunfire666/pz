@@ -7,8 +7,17 @@ signal attacked_player(world_position: Vector2)
 enum Awareness { IDLE, VISUAL, VISUAL_MEMORY, SOUND, GROUP, SEARCH, MIGRATION }
 
 const MOVE_SPEED := 0.58
-const VISUAL_RANGE := 4.8
+const VISUAL_RANGE := 9.6
 const MAX_HEALTH := 2
+const BODY_DAMAGE_PER_POINT := 50.0
+const HEAD_DAMAGE_MULTIPLIER := 2
+const TURN_SPEED := 2.5
+const MOVE_TURN_ALIGNMENT := 0.82
+const ATTACK_STANDOFF_DISTANCE := 0.72
+const ATTACK_ANIMATION_DURATION := 2.633
+const ATTACK_HIT_TIME := ATTACK_ANIMATION_DURATION * 0.46
+const ATTACK_MOVE_MULTIPLIER := 0.28
+const BACKWARD_MOVE_MULTIPLIER := 0.52
 
 var world_map: WorldMap
 var player: PlayerController
@@ -20,6 +29,8 @@ var logical_position := Vector2.ZERO
 var floor_level := 0
 var stair_id := ""
 var health := MAX_HEALTH
+var body_health := ActorBody.healthy_regions()
+var last_hit_region := ""
 var target_position := Vector2.ZERO
 var target_floor := 0
 var target_stair_id := ""
@@ -44,6 +55,10 @@ var _damage_flash_left := 0.0
 var _navigation := LocalNavigation.new()
 var _logic_tick_interval := 0.0
 var _logic_tick_elapsed := 0.0
+var visual_attack_remaining := 0.0
+var visual_attack_id := 0
+var _attack_impact_remaining := -1.0
+var _attack_target: Node
 
 
 func setup(p_world_map: WorldMap, p_player: PlayerController, p_player_state: PlayerState,
@@ -80,6 +95,11 @@ func set_logic_tick_interval(interval: float) -> void:
 func _process(delta: float) -> void:
 	if world_map == null or player == null or health <= 0 or is_queued_for_deletion(): return
 	_damage_flash_left = maxf(0.0, _damage_flash_left - delta)
+	visual_attack_remaining = maxf(0.0, visual_attack_remaining - delta * GameTime.simulation_scale())
+	if _attack_impact_remaining >= 0.0:
+		_attack_impact_remaining -= delta * GameTime.simulation_scale()
+		if _attack_impact_remaining <= 0.0:
+			_resolve_attack_impact()
 	if _logic_tick_interval > 0.0:
 		_logic_tick_elapsed += delta
 		if _logic_tick_elapsed < _logic_tick_interval:
@@ -96,22 +116,27 @@ func _process(delta: float) -> void:
 		_perception_game_seconds_left = _rule("perception_interval_game_seconds", 1.5)
 		_update_perception()
 	_update_memory()
+	var target_point := ActorPerception.point(world_map, target_position, target_floor, target_stair_id, ActorPerception.CHEST_HEIGHT)
 	if has_target:
-		ActorCombat.turn_toward(self, ActorPerception.point(world_map, target_position, target_floor, target_stair_id, ActorPerception.CHEST_HEIGHT), scaled_delta)
-	if has_target:
+		ActorCombat.turn_toward(self, target_point, scaled_delta, TURN_SPEED)
+		# Stair elevation can make a remembered target point sharply lower than the
+		# player body currently within claw range. Keep the visual/combat aim in a
+		# close-quarters cone; ActorCombat still resolves the exact body surface.
+		look_pitch = clampf(look_pitch, -0.55, 0.55)
+	if has_target and _can_advance_toward_target(target_point):
 		_move_toward_target(scaled_delta)
 		if ((target_stair_id.is_empty() and floor_level == target_floor and stair_id.is_empty()) \
 			or (not target_stair_id.is_empty() and stair_id == target_stair_id)) and logical_position.distance_to(target_position) <= 0.20:
 			_reached_target()
 	var victim: Node = null
-	if attack_cooldown <= 0.0:
+	if attack_cooldown <= 0.0 and _attack_impact_remaining < 0.0:
 		victim = ActorCombat.select_target(self, get_tree().get_nodes_in_group("zombie_targets"), ActorCombat.direction(self), ActorCombat.ZOMBIE_REACH)
 	if victim != null and attack_cooldown <= 0.0:
-		attack_cooldown = 1.8
-		if victim is PlayerController:
-			victim.state.receive_hit("Scratch", "Right Arm", 12.0, true)
-			attacked_player.emit(logical_position)
-		else: victim.take_damage(12.0)
+		attack_cooldown = ATTACK_ANIMATION_DURATION
+		visual_attack_remaining = ATTACK_ANIMATION_DURATION
+		visual_attack_id += 1
+		_attack_target = victim
+		_attack_impact_remaining = ATTACK_HIT_TIME
 		NoiseBus.emit_actor_noise(self, 3.0, "struggle")
 
 
@@ -279,10 +304,45 @@ func _can_hit_player() -> bool:
 	if player_state.is_dead(): return false
 	return not ActorCombat.contact(self, player, ActorCombat.direction(self), ActorCombat.ZOMBIE_REACH).is_empty()
 
+
+func _can_advance_toward_target(target_point: Vector3) -> bool:
+	var planar_target := Vector2(target_point.x, target_point.z)
+	var offset := planar_target - logical_position
+	if offset.length_squared() > 0.000001 and facing_direction.dot(offset.normalized()) < MOVE_TURN_ALIGNMENT:
+		return false
+	# A tracked player is approached only to the attack stand-off distance. The
+	# body contact test still determines whether a scratch is legal.
+	if target_actor_id == "player" and floor_level == player.floor_level and stair_id == player.stair_id \
+		and logical_position.distance_to(player.logical_position) <= ATTACK_STANDOFF_DISTANCE:
+		return false
+	return true
+
+func receive_hit(amount: int, region: String) -> void:
+	if amount <= 0 or health <= 0 or is_queued_for_deletion(): return
+	if region not in PlayerState.BODY_REGIONS: return
+	last_hit_region = region
+	_damage_flash_left = 0.28
+	interrupt_attack()
+	body_health[region] = maxf(0.0, float(body_health[region]) - amount * BODY_DAMAGE_PER_POINT)
+	take_damage(amount * (HEAD_DAMAGE_MULTIPLIER if region == "Head" else 1))
+
+
+func arm_performance() -> float:
+	var condition := minf(float(body_health["Left Arm"]), float(body_health["Right Arm"]))
+	condition = minf(condition, minf(float(body_health["Left Hand"]), float(body_health["Right Hand"])))
+	return lerpf(0.5, 1.0, condition / 100.0)
+
+
+func leg_performance() -> float:
+	var condition := minf(float(body_health["Left Leg"]), float(body_health["Right Leg"]))
+	condition = minf(condition, minf(float(body_health["Left Foot"]), float(body_health["Right Foot"])))
+	return lerpf(0.5, 1.0, condition / 100.0)
+
+
 func take_damage(amount: int) -> void:
 	if amount <= 0 or health <= 0 or is_queued_for_deletion(): return
 	health = maxi(0, health - amount)
-	_damage_flash_left = 0.16
+	_damage_flash_left = 0.28
 	if health <= 0:
 		died.emit(self)
 		queue_free()
@@ -293,14 +353,42 @@ func reset_navigation() -> void:
 
 
 func _move_toward_target(scaled_delta: float) -> void:
-	var previous := logical_position
+	var speed := MOVE_SPEED * leg_performance()
+	if visual_attack_remaining > 0.0: speed *= ATTACK_MOVE_MULTIPLIER
+	if not target_position.is_equal_approx(logical_position) and facing_direction.dot(logical_position.direction_to(target_position)) < -0.35:
+		speed *= BACKWARD_MOVE_MULTIPLIER
 	var result := _navigation.advance(world_map, logical_position, floor_level, stair_id,
-		target_position, target_floor, MOVE_SPEED, scaled_delta, target_stair_id)
+		target_position, target_floor, speed, scaled_delta, target_stair_id)
 	logical_position = result["position"]
 	floor_level = int(result["floor"])
 	stair_id = String(result["stair_id"])
-	if logical_position.distance_squared_to(previous) > 0.000001:
-		facing_direction = previous.direction_to(logical_position)
+	# Facing is updated by turn_toward before movement. Do not replace it with the
+	# path direction or a zombie would snap around when its target is behind it.
+
+
+func _resolve_attack_impact() -> void:
+	_attack_impact_remaining = -1.0
+	var victim := _attack_target
+	_attack_target = null
+	if not is_instance_valid(victim) or victim.is_queued_for_deletion(): return
+	var hit := ActorCombat.contact(self, victim, ActorCombat.direction(self), ActorCombat.ZOMBIE_REACH)
+	if hit.is_empty(): return
+	if victim is PlayerController:
+		victim.state.receive_hit("Scratch", hit["region"], 12.0 * arm_performance(), true)
+		victim.interrupt_attack()
+		victim.visual_damage_remaining = 0.18
+		victim.visual_hit_region = hit["region"]
+		ActorCombat.apply_hit_recoil(victim, logical_position.direction_to(victim.logical_position), 0.10)
+		attacked_player.emit(logical_position)
+	else:
+		victim.receive_hit(12.0 * arm_performance(), hit["region"])
+		ActorCombat.apply_hit_recoil(victim, logical_position.direction_to(victim.logical_position), 0.10)
+
+
+func interrupt_attack() -> void:
+	_attack_impact_remaining = -1.0
+	visual_attack_remaining = 0.0
+	attack_cooldown = maxf(attack_cooldown, 0.18)
 
 
 func _rule(property: String, fallback: float) -> float:

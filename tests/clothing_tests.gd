@@ -90,21 +90,21 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 		"clothing inventory tab aggregates only garments currently worn by the player")
 	game.world_3d_view._update_actors()
 	var player_visual: Dictionary = game.world_3d_view.actor_visuals[game.player.get_instance_id()]
-	var equipment_visual := player_visual["equipment_visual"] as PlayerEquipmentVisual
-	check.call(equipment_visual.outer_top_root.visible and equipment_visual._shown_outer_top_uid == replacement_uid
-		and equipment_visual.get_parent() == player_visual["root"],
-		"outer-top visual reads the authoritative worn item and follows the player root")
+	var body := player_visual["character_model"] as MixamoCharacterVisual
+	check.call(body.get_parent() == player_visual["root"]
+		and not player_visual.has("equipment_visual"),
+		"full-body third-person model replaces the old unskinned clothing and body proxies")
 	game.player._attack_flash_left = 0.1
 	game.world_3d_view._update_actors()
-	check.call(equipment_visual.outer_top_root.visible and (player_visual["swing"] as Node3D).visible,
-		"worn jacket remains attached while the existing attack effect plays")
+	check.call(not player_visual.has("swing") and body.visible,
+		"imported body remains present without the removed yellow attack effect")
 	game.player._attack_flash_left = 0.0
 	game.inventory.move_unit(replacement_uid, "loose")
-	game.world_3d_view._update_actors()
-	check.call(not equipment_visual.outer_top_root.visible, "outer-top visual hides after the authoritative slot is cleared")
+	check.call(game.player_state.clothing.protection_percent("Torso") == 0,
+		"removing clothing removes its authoritative protection")
 	game.inventory.move_unit(replacement_uid, "outer_top")
-	game.world_3d_view._update_actors()
-	check.call(equipment_visual.outer_top_root.visible, "outer-top visual returns after the same instance is worn again")
+	check.call(game.player_state.clothing.protection_percent("Torso") == 50,
+		"wearing clothing restores protection with the imported body")
 	game.hud.character_panel.refresh(game)
 	var torso_status := game.hud.character_panel.region_data(game, "Torso")
 	check.call(torso_status["protection"] == 50 and String(torso_status["worn"]).contains("Jacket"),

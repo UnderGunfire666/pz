@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="CharacterBodyProfile" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/character_body_profile.gd" id="1_pkwj3"]
+
+[resource]
+script = ExtResource("1_pkwj3")
+model_path = "res://assets/characters/mixamo/Human/Player.fbx"
+model_scale = 0.9973767057446661
+model_offset = Vector3(0, 0.000101976104, 0)
+regions = {
+"Head": AABB(-0.115, 1.4937086, -0.1266014, 0.23, 0.3062914, 0.26),
+"Left Arm": AABB(-0.3941598, 0.83697027, -0.003447894, 0.27207333, 0.6600373, 0.13000056),
+"Left Foot": AABB(-0.1583133, 0, -0.27777952, 0.13230848, 0.16, 0.36901152),
+"Left Hand": AABB(-0.43541554, 0.65574867, 0.0065520145, 0.16125573, 0.3012216, 0.11000009),
+"Left Leg": AABB(-0.16100511, 0.16, -0.06944822, 0.14000031, 0.8354035, 0.1656802),
+"Right Arm": AABB(0.122145236, 0.8369127, -0.003447745, 0.27198058, 0.6600621, 0.13000007),
+"Right Foot": AABB(0.026005752, 0, -0.27777898, 0.13231146, 0.16, 0.36901158),
+"Right Hand": AABB(0.2741258, 0.6556821, 0.006552253, 0.16122232, 0.3012306, 0.110000096),
+"Right Leg": AABB(0.021005213, 0.16, -0.0694481, 0.14000054, 0.8354035, 0.1656807),
+"Torso": AABB(-0.19, 0.8754035, -0.14000048, 0.38, 0.6183051, 0.28)
+}
+joints = {
+"LeftArm": Vector3(-0.18708648, 1.4320076, 0.061552677),
+"LeftForeArm": Vector3(-0.2578523, 1.1679994, 0.061552454),
+"LeftHand": Vector3(-0.3291598, 0.90197027, 0.061552104),
+"LeftHandMiddle3": Vector3(-0.38041553, 0.7107487, 0.061552014),
+"RightArm": Vector3(0.18714523, 1.4319748, 0.061552327),
+"RightForeArm": Vector3(0.25786492, 1.1679543, 0.061552353),
+"RightHand": Vector3(0.32912582, 0.9019127, 0.061552253),
+"RightHandMiddle3": Vector3(0.38034815, 0.7106821, 0.06155235)
+}

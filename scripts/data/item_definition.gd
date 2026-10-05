@@ -17,6 +17,7 @@ extends Resource
 @export var rag_yield := 0
 @export var weapon_attack_type := ""
 @export var weapon_damage := 0
+@export var weapon_hitbox_size := Vector3.ZERO
 @export var switchable := false
 @export var hunger_restore := 0.0
 @export var thirst_restore := 0.0
@@ -54,4 +55,15 @@ static func clothing(id_value: String, title: String, slot: String, regions: Arr
 	item.clothing_warmth = warmth.duplicate(true)
 	item.clothing_max_durability = durability.duplicate(true)
 	item.rag_yield = 2 if slot in ["outer_top", "outer_bottom"] else 1
+	return item
+
+
+static func baseball_bat() -> ItemDefinition:
+	var item := ItemDefinition.new("baseball_bat", "Baseball bat", Vector3(4, 4, 85), 1.05, ["weapon", "tool"])
+	item.requires_two_hands = true
+	item.weapon_attack_type = "bat swing"
+	item.weapon_damage = 1
+	# Metres, in the attack direction: a narrow cylinder approximation sampled
+	# against the authoritative per-body-part hurtboxes.
+	item.weapon_hitbox_size = Vector3(0.11, 0.11, 1.5)
 	return item

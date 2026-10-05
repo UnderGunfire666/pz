@@ -36,6 +36,18 @@ func _run() -> void:
 	game = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	add_child(game)
 	_expect(not game.hud.character_creation_panel.visible, "startup keeps unfinished character creation hidden")
+	var starter_weapon := game.inventory.held_weapon()
+	_expect(starter_weapon != null and starter_weapon.definition.id == "baseball_bat"
+		and starter_weapon.definition.requires_two_hands and not game.inventory.contents("two_hands").is_empty(),
+		"new player starts with a two-handed baseball bat")
+	game.world_3d_view._process(0.0)
+	_expect(game.world_3d_view.third_person_equipment.held_ids[1] == "baseball_bat"
+		and game.world_3d_view.third_person_equipment.hands[1].get_child_count() == 1,
+		"default baseball bat uses the imported third-person model")
+	# The remainder of the legacy regression fixture exercises an empty starting
+	# inventory. The running game still retains the default bat above.
+	game.inventory.contents("two_hands").clear()
+	game.inventory.revision += 1
 	await get_tree().process_frame
 	game.player_state.character.select_build(game.character_catalog.rules.default_occupation_id, [])
 	game.hud.character_creation_panel.hide()
@@ -55,6 +67,9 @@ func _run() -> void:
 	preload("res://tests/first_person_upgrade_tests.gd").save_pitch(game, _expect)
 	preload("res://tests/first_person_upgrade_tests.gd").stair_feedback(game, _expect)
 	preload("res://tests/combat_navigation_tests.gd").run(game, _expect)
+	preload("res://tests/body_part_tests.gd").run(game, _expect)
+	preload("res://tests/full_body_tests.gd").run(game, _expect)
+	preload("res://tests/mixamo_animation_tests.gd").run(game, _expect)
 	preload("res://tests/cabinet_tests.gd").run(game, _expect)
 	WorldStreamingTests.run(game, _expect)
 	_test_barrier_rendering()
@@ -297,14 +312,17 @@ func _test_visibility_and_combat() -> void:
 	game._on_player_attack(game.player.logical_position, Vector2.DOWN)
 	_expect(zombie.health == ZombieActor.MAX_HEALTH, "player cannot attack through slab")
 	_place_player(Vector2(14.5, 6.5), 1)
+	game.player.look_pitch = -0.55
 	game._on_player_attack(game.player.logical_position, Vector2.DOWN)
 	_expect(zombie.health == ZombieActor.MAX_HEALTH - 1, "directional melee damages same-floor target")
+	game.player.look_pitch = 0.0
 	zombie.attack_cooldown = 0.0
-	var arm_health := float(game.player_state.body_health["Right Arm"])
+	var wounds_before := game.player_state.wounds.size()
 	zombie.facing_direction = zombie.logical_position.direction_to(game.player.logical_position)
 	zombie.look_pitch = 0.0
 	zombie._process(0.01)
-	_expect(game.player_state.body_health["Right Arm"] < arm_health and is_equal_approx(game.player_state.health, health),
+	zombie._process(ZombieActor.ATTACK_ANIMATION_DURATION + 0.01)
+	_expect(game.player_state.wounds.size() > wounds_before and is_equal_approx(game.player_state.health, health),
 		"zombie claw damages its body region without double-charging overall health")
 	zombie.logical_position = Vector2(14.5, 4.95)
 	game.player.logical_position = Vector2(14.5, 4.25)
@@ -456,9 +474,11 @@ func _test_npc_and_paths() -> void:
 	zombie.logical_position = link.start + link.direction() * 0.25
 	zombie.stair_id = link.id
 	zombie.attack_cooldown = 0.0
-	var arm_health := float(game.player_state.body_health["Right Arm"])
-	zombie._process(0.0)
-	_expect(game.player_state.body_health["Right Arm"] < arm_health, "zombie can injure player on same stair, no stair invulnerability")
+	var wounds_before := game.player_state.wounds.size()
+	for step in 60:
+		zombie._process(0.1)
+		if game.player_state.wounds.size() > wounds_before: break
+	_expect(game.player_state.wounds.size() > wounds_before, "zombie can injure player on same stair, no stair invulnerability")
 	game.zombie_spawner.clear_population()
 
 

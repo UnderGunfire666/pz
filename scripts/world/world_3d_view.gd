@@ -1,18 +1,21 @@
 class_name World3DView
 extends Node3D
 
-## First-person presentation. Simulation owns collision, combat and AI sensing.
+## Third-person presentation. Simulation owns collision, combat and AI sensing.
 var world_map: WorldMap
 var player: PlayerController
 var actor_layer: Node2D
 var interactions: InteractionSystem
 var camera: Camera3D
 var view_rig: PlayerViewRig
-var first_person_hands: FirstPersonHands
+var third_person_equipment: FirstPersonHands
 var chunk_builder := WorldChunkBuilder.new()
 var streamer := WorldChunkStreamer.new()
 var actor_visuals: Dictionary = {}
 var interaction_markers: Array[Dictionary] = []
+var _camera_shake_left := 0.0
+var _camera_shake_duration := 0.0
+var _camera_shake_strength := 0.0
 var _marker_index: Dictionary = {}
 var _marker_nodes: Dictionary = {}
 var _marker_revision := -1
@@ -23,15 +26,10 @@ var _active_building_id := ""
 var _display_floor := -1
 signal player_building_changed(previous_id: String, current_id: String)
 signal player_display_floor_changed(floor_index: int)
-var _player_material := _material(Color("d8e7f3"))
-var _player_accent_material := _material(Color("416a92"))
-var _zombie_material := _material(Color("a54646"))
-var _zombie_flash_material := _material(Color("f06a58"))
 var _npc_material := _material(Color("76a878"))
 var _door_material := _material(Color("936d43"))
 var _health_back_material := _material(Color("261c1a"))
 var _health_fill_material := _material(Color("ed655c"))
-var _swing_material := _material(Color(1.0, 0.86, 0.53, 0.72), true)
 
 
 func setup(p_world_map: WorldMap, p_player: PlayerController,
@@ -46,9 +44,9 @@ func setup(p_world_map: WorldMap, p_player: PlayerController,
 	add_child(view_rig)
 	camera = view_rig.camera
 	camera.make_current()
-	first_person_hands = FirstPersonHands.new()
-	camera.add_child(first_person_hands)
-	first_person_hands.setup(player.state.inventory)
+	third_person_equipment = FirstPersonHands.new()
+	camera.add_child(third_person_equipment)
+	third_person_equipment.setup(player.state.inventory)
 	sync_view_to_player()
 	chunk_builder.setup(world_map)
 	streamer.name = "WorldChunks"
@@ -63,12 +61,12 @@ func setup(p_world_map: WorldMap, p_player: PlayerController,
 func _process(delta: float) -> void:
 	if player == null: return
 	_update_camera(delta)
-	first_person_hands.advance(delta, player)
 	streamer.advance()
 	_update_location()
 	_update_lighting()
 	_update_interaction_markers()
-	_update_actors()
+	_update_actors(delta)
+	third_person_equipment.advance(delta, player)
 
 
 func orbit_camera(mouse_delta: Vector2) -> void:
@@ -88,20 +86,36 @@ func sync_view_to_player() -> void:
 	_update_camera(0.0)
 
 
-func _update_camera(_delta: float) -> void:
+func _update_camera(delta: float) -> void:
 	var height := world_map.elevation_at(player.logical_position, player.floor_level, player.stair_id)
-	view_rig.update_pose(Vector3(player.logical_position.x, height, player.logical_position.y))
+	view_rig.update_pose(Vector3(player.logical_position.x, height, player.logical_position.y), world_map)
+	if _camera_shake_left <= 0.0:
+		return
+	var elapsed := _camera_shake_duration - _camera_shake_left
+	var fade := _camera_shake_left / maxf(0.001, _camera_shake_duration)
+	var phase := elapsed * 92.0
+	# This only offsets the rendered camera after its collision-clamped pose has
+	# been calculated; player aim, LOS, collision and combat remain authoritative.
+	camera.position += Vector3(sin(phase) * _camera_shake_strength * fade,
+		cos(phase * 1.37) * _camera_shake_strength * 0.62 * fade, 0.0)
+	_camera_shake_left = maxf(0.0, _camera_shake_left - delta)
+
+
+func play_hit_camera_shake(strength: float = 0.035, duration: float = 0.11) -> void:
+	_camera_shake_strength = maxf(_camera_shake_strength, strength)
+	_camera_shake_duration = maxf(_camera_shake_duration, duration)
+	_camera_shake_left = maxf(_camera_shake_left, duration)
 
 
 func refresh_after_load() -> void:
 	sync_view_to_player()
-	first_person_hands.reset_motion()
-	first_person_hands.advance(0.0, player)
+	third_person_equipment.reset_motion()
 	streamer.refresh(true)
 	streamer.flush_pending()
 	_update_location()
 	_refresh_interaction_markers()
 	_update_actors()
+	third_person_equipment.advance(0.0, player)
 
 
 func _update_location() -> void:
@@ -232,7 +246,7 @@ func _create_interaction_marker(point: Dictionary) -> Node3D:
 	return root
 
 
-func _update_actors() -> void:
+func _update_actors(delta: float = 0.0) -> void:
 	var alive_ids: Dictionary = {}
 	for actor in actor_layer.get_children():
 		if not actor is PlayerController and not actor is ZombieActor and not actor is SurvivorNPC:
@@ -261,23 +275,65 @@ func _update_actors() -> void:
 			(visual["health_bar"] as Node3D).visible = true
 		model.position = Vector3(logical_position.x, world_map.elevation_at(logical_position, actor_floor, stair_id), logical_position.y)
 		if node == player:
+			model.position = ActorBody.transform_for(player).origin
 			model.rotation.y = atan2(-player.facing_direction.x, -player.facing_direction.y)
-			(visual["equipment_visual"] as PlayerEquipmentVisual).refresh()
-			var swing: Node3D = visual["swing"]
-			swing.visible = player._attack_flash_left > 0.0
-			swing.rotation.y = lerpf(-0.9, 0.9, 1.0 - clampf(player._attack_flash_left / 0.18, 0.0, 1.0))
+			var player_character := visual["character_model"] as MixamoCharacterVisual
+			var held_id := _player_held_item_id()
+			var equipment_changed: bool = String(visual.get("held_item_id", held_id)) != held_id
+			visual["held_item_id"] = held_id
+			if player.aim_mode:
+				var upper := "armed_idle"
+				var restart_upper_attack := false
+				if int(visual.get("attack_id", 0)) != player.visual_attack_id:
+					visual["attack_id"] = player.visual_attack_id
+					upper = "attack"
+					restart_upper_attack = true
+				elif player.visual_attack_remaining > 0.0 and player_character.upper_animation_player.is_playing() and player_character.upper_animation_player.get_current_animation() == "attack":
+					upper = "attack"
+				player_character.advance_split_animation(delta, _player_animation(), _player_animation_speed(), upper, restart_upper_attack,
+					PlayerController.ATTACK_ANIMATION_SPEED if upper == "attack" else 1.0)
+			else:
+				# Leaving right-click preparation immediately removes both partial layers.
+				# An already committed attack continues as one full-body clip.
+				var full_body := "attack" if player.visual_attack_remaining > 0.0 else _player_animation()
+				var full_speed := PlayerController.ATTACK_ANIMATION_SPEED if full_body == "attack" else _player_animation_speed()
+				player_character.advance_animation(delta, full_body, full_speed)
+			player_character.set_region_flash(player.visual_hit_region, player.visual_damage_remaining)
 		elif node is ZombieActor:
 			var zombie := node as ZombieActor
 			var direction := zombie.facing_direction
 			if direction.length_squared() > 0.001:
 				model.rotation.y = atan2(-direction.x, -direction.y)
 			_update_health_bar(visual, zombie.health, ZombieActor.MAX_HEALTH)
-			var flash := _zombie_flash_material if zombie._damage_flash_left > 0.0 else _zombie_material
-			(visual["body"] as MeshInstance3D).material_override = flash
-			(visual["head"] as MeshInstance3D).material_override = flash
+			var previous: Vector3 = visual.get("last_render_position", model.position)
+			var motion_speed := previous.distance_to(model.position) / delta if delta > 0.00001 else 0.0
+			visual["last_render_position"] = model.position
+			var character := visual["character_model"] as MixamoCharacterVisual
+			character.set_region_flash(zombie.last_hit_region, zombie._damage_flash_left)
+			if zombie.visual_attack_remaining > 0.0:
+				if int(visual.get("attack_id", 0)) != zombie.visual_attack_id:
+					character.play_animation("attack", 0.0, 1.0, true)
+					visual["attack_id"] = zombie.visual_attack_id
+				character.advance_animation(delta, "attack", 1.0)
+			elif motion_speed > 0.04:
+				var chasing := zombie.awareness in [ZombieActor.Awareness.VISUAL, ZombieActor.Awareness.VISUAL_MEMORY]
+				character.advance_animation(delta, "run" if chasing else "walk", clampf(motion_speed / 0.58, 0.65, 1.5))
+			else:
+				character.advance_animation(delta, "idle", 1.0)
 		elif node is SurvivorNPC:
 			var direction: Vector2 = node.facing_direction
 			model.rotation.y = atan2(-direction.x, -direction.y)
+			var npc_character := visual["character_model"] as MixamoCharacterVisual
+			npc_character.set_region_flash(node.visual_hit_region, node.visual_damage_remaining)
+			if node.visual_attack_remaining > 0.0:
+				if int(visual.get("attack_id", 0)) != node.visual_attack_id:
+					npc_character.play_animation("attack", 0.0, 1.0, true)
+					visual["attack_id"] = node.visual_attack_id
+				npc_character.advance_animation(delta, "attack", 1.0)
+			elif node.visual_velocity.length() > 0.04:
+				npc_character.advance_animation(delta, "walk", clampf(node.visual_velocity.length() / SurvivorNPC.MOVE_SPEED, 0.65, 1.35))
+			else:
+				npc_character.advance_animation(delta, "idle", 1.0)
 		if bool(visual["has_health"]):
 			var bar: Node3D = visual["health_bar"]
 			bar.global_position = model.global_position + Vector3(0.0, 2.05, 0.0)
@@ -285,6 +341,37 @@ func _update_actors() -> void:
 	for actor_id in actor_visuals.keys():
 		if not alive_ids.has(actor_id):
 			_remove_actor_visual(actor_id, actor_visuals[actor_id])
+
+
+func _player_animation() -> String:
+	var speed := player.visual_velocity.length()
+	if speed < 0.04: return "idle"
+	var facing := player.facing_direction
+	var right := Vector2(-facing.y, facing.x)
+	if player.visual_velocity.dot(facing) < -absf(player.visual_velocity.dot(right)) * 0.85:
+		return "back_run" if speed > PlayerController.WALK_SPEED * PlayerController.BACKWARD_MOVE_MULTIPLIER * 1.18 else "back_walk"
+	if absf(player.visual_velocity.dot(right)) > absf(player.visual_velocity.dot(facing)) * 1.15:
+		return "strafe_right" if player.visual_velocity.dot(right) > 0.0 else "strafe_left"
+	if speed > PlayerController.WALK_SPEED * 1.18:
+		return "run"
+	return "walk"
+
+
+func _player_animation_speed() -> float:
+	var speed := player.visual_velocity.length()
+	if speed < 0.04: return 1.0
+	var animation := _player_animation()
+	var reference := PlayerController.WALK_SPEED * (PlayerController.SPRINT_MULTIPLIER if animation in ["run", "armed_run", "back_run"] else 1.0)
+	if animation in ["back_walk", "back_run"]: reference *= PlayerController.BACKWARD_MOVE_MULTIPLIER
+	return clampf(speed / reference, 0.65, 1.35)
+
+
+func _player_held_item_id() -> String:
+	if player.state.inventory == null: return ""
+	for slot: String in ["right_hand", "left_hand", "two_hands"]:
+		var contents := player.state.inventory.contents(slot)
+		if not contents.is_empty(): return contents[0].definition.id
+	return ""
 
 
 func _actor_is_visible(node: Node2D, _actor_id: int, logical_position: Vector2,
@@ -299,64 +386,33 @@ func _create_actor_visual(actor: Node2D) -> Dictionary:
 	var root := Node3D.new()
 	root.name = "PlayerVisual" if actor == player else "ActorVisual"
 	add_child(root)
-	var body := MeshInstance3D.new()
-	body.name = "Body"
-	var lower_body: MeshInstance3D = null
-	if actor == player:
-		var torso_mesh := CylinderMesh.new()
-		torso_mesh.top_radius = 0.22
-		torso_mesh.bottom_radius = 0.25
-		torso_mesh.height = 0.72
-		torso_mesh.radial_segments = 8
-		body.mesh = torso_mesh
-		body.position.y = 1.06
-		lower_body = MeshInstance3D.new()
-		lower_body.name = "LowerBody"
-		var lower_mesh := CylinderMesh.new()
-		lower_mesh.top_radius = 0.22
-		lower_mesh.bottom_radius = 0.17
-		lower_mesh.height = 0.7
-		lower_mesh.radial_segments = 8
-		lower_body.mesh = lower_mesh
-		lower_body.position.y = 0.35
-		root.add_child(lower_body)
+	var has_health := actor is ZombieActor
+	var visual := {"root": root, "has_health": has_health}
+	if actor == player or has_health or actor is SurvivorNPC:
+		var imported := MixamoCharacterVisual.new()
+		imported.name = "CharacterModel"
+		root.add_child(imported)
+		imported.setup(ActorBody.profile(actor), actor == player)
+		visual["character_model"] = imported
+		if actor == player: third_person_equipment.bind_body(imported)
 	else:
+		# NPC appearance is still a placeholder; only Player/Zombie assets exist.
+		var body := MeshInstance3D.new()
 		var capsule := CapsuleMesh.new()
 		capsule.radius = 0.26
 		capsule.height = 1.42
 		body.mesh = capsule
 		body.position.y = 0.76
-	root.add_child(body)
-	var head := MeshInstance3D.new()
-	head.name = "Head"
-	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.23
-	head_mesh.height = 0.46
-	head.mesh = head_mesh
-	head.position = Vector3(0.0, 1.62, -0.04)
-	root.add_child(head)
-	var has_health := actor is ZombieActor
-	var material := _zombie_material if has_health else (_npc_material if actor is SurvivorNPC else _player_material)
-	body.material_override = material
-	if lower_body != null: lower_body.material_override = material
-	head.material_override = _player_accent_material if actor == player else material
-	if has_health:
-		head.position.z = -0.2
-	var direction_marker := MeshInstance3D.new()
-	direction_marker.name = "DirectionMarker"
-	var marker_mesh := BoxMesh.new()
-	marker_mesh.size = Vector3(0.07, 0.07, 0.42)
-	direction_marker.mesh = marker_mesh
-	direction_marker.position = Vector3(0.0, 0.85, -0.42)
-	direction_marker.material_override = _door_material
-	root.add_child(direction_marker)
-	var visual := {"root": root, "body": body, "head": head, "lower_body": lower_body, "has_health": has_health}
-	if actor == player:
-		var equipment_visual := PlayerEquipmentVisual.new()
-		root.add_child(equipment_visual)
-		equipment_visual.setup(player.state.inventory)
-		visual["equipment_visual"] = equipment_visual
-		visual["swing"] = _create_swing_visual(root)
+		body.material_override = _npc_material
+		root.add_child(body)
+		var head := MeshInstance3D.new()
+		var sphere := SphereMesh.new()
+		sphere.radius = 0.23
+		sphere.height = 0.46
+		head.mesh = sphere
+		head.position.y = 1.62
+		head.material_override = _npc_material
+		root.add_child(head)
 	if has_health:
 		visual["health_bar"] = _create_health_bar()
 		var actor_id := actor.get_instance_id()
@@ -365,28 +421,6 @@ func _create_actor_visual(actor: Node2D) -> Dictionary:
 			CONNECT_ONE_SHOT
 		)
 	return visual
-
-
-func _create_swing_visual(parent: Node3D) -> Node3D:
-	var root := Node3D.new()
-	root.name = "AttackSwing"
-	parent.add_child(root)
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for index in range(12):
-		var a := lerpf(-0.45, 0.45, float(index) / 12.0)
-		var b := lerpf(-0.45, 0.45, float(index + 1) / 12.0)
-		for point in [Vector2(sin(a), -cos(a)) * 0.72, Vector2(sin(a), -cos(a)) * 1.22, Vector2(sin(b), -cos(b)) * 1.22,
-			Vector2(sin(a), -cos(a)) * 0.72, Vector2(sin(b), -cos(b)) * 1.22, Vector2(sin(b), -cos(b)) * 0.72]:
-			surface.add_vertex(Vector3(point.x, 0.85, point.y))
-	var arc := MeshInstance3D.new()
-	arc.mesh = surface.commit()
-	arc.material_override = _swing_material
-	arc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(arc)
-	root.visible = false
-	return root
-
 
 func _remove_actor_visual(actor_id: int, visual: Dictionary) -> void:
 	for key in ["root", "health_bar"]:

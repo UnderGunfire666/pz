@@ -19,6 +19,7 @@ static func pack(stack: ItemStack) -> Dictionary:
 		"clothing_warmth": item.clothing_warmth.duplicate(true),
 		"clothing_max_durability": item.clothing_max_durability.duplicate(true), "rag_yield": item.rag_yield,
 		"weapon_attack_type": item.weapon_attack_type, "weapon_damage": item.weapon_damage,
+		"weapon_hitbox_size": item.weapon_hitbox_size,
 		"switchable": item.switchable, "hunger_restore": item.hunger_restore,
 		"thirst_restore": item.thirst_restore, "happiness_effect": item.happiness_effect,
 		"medical_action": item.medical_action}
@@ -36,6 +37,7 @@ static func valid(data: Variant, depth: int = 0) -> bool:
 	if not data.get("rag_yield", 0) is int or int(data.get("rag_yield", 0)) < 0: return false
 	if not data.get("weapon_attack_type", "") is String or not data.get("weapon_damage", 0) is int or int(data.get("weapon_damage", 0)) < 0: return false
 	if not data.get("switchable", false) is bool: return false
+	if not data.get("weapon_hitbox_size", Vector3.ZERO) is Vector3 or not data.get("weapon_hitbox_size", Vector3.ZERO).is_finite(): return false
 	if not data.get("medical_action", "") is String: return false
 	for key in ["hunger_restore", "thirst_restore", "happiness_effect"]:
 		var effect: Variant = data.get(key, 0.0)
@@ -80,6 +82,7 @@ static func unpack(data: Dictionary) -> ItemStack:
 	definition.rag_yield = data.get("rag_yield", 0)
 	definition.weapon_attack_type = data.get("weapon_attack_type", "")
 	definition.weapon_damage = data.get("weapon_damage", 0)
+	definition.weapon_hitbox_size = data.get("weapon_hitbox_size", Vector3.ZERO)
 	definition.switchable = data.get("switchable", false)
 	definition.hunger_restore = data.get("hunger_restore", 0.0)
 	definition.thirst_restore = data.get("thirst_restore", 0.0)

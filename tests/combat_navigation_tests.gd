@@ -49,6 +49,9 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	z.logical_position = p.logical_position + Vector2(0, 1.0)
 	z.facing_direction = Vector2.UP
 	check.call(not ActorCombat.contact(z, p, ActorCombat.direction(z), ActorCombat.ZOMBIE_REACH).is_empty(), "zombie attack uses the same directional volume")
+	var bat := ItemDefinition.baseball_bat()
+	check.call(not ActorCombat.weapon_contact(p, z, p.look_direction(), bat.weapon_hitbox_size).is_empty(),
+		"baseball bat collision volume contacts the zombie body rather than using a render mesh")
 	var npc := SurvivorNPC.new()
 	game.actor_layer.add_child(npc)
 	npc.world_map = map
@@ -58,15 +61,20 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	z.add_to_group("zombies")
 	npc.set_process(false)
 	z.set_process(false)
-	check.call(npc._defend(0.1) and z.health == 1, "NPC performs a directional close-range defensive attack")
+	check.call(npc._defend(0.1) and z.health == 2, "NPC starts a directional attack before its collision window")
+	npc._process(SurvivorNPC.ATTACK_HIT_TIME + 0.01)
+	check.call(z.health == 1, "NPC applies its directional attack in the collision window")
 	npc._defend(0.1)
 	check.call(z.health == 1, "NPC defense respects attack cooldown")
 	npc.add_to_group("zombie_targets")
-	p.logical_position = Vector2(10, 10)
+	# Keep the NPC and zombie in the player's three-tile active collision bubble,
+	# while placing the player behind the zombie's current attack direction.
+	p.logical_position = Vector2(3, 6)
 	z.player = p
 	z.player_state = game.player_state
 	z._perception_game_seconds_left = 100
-	z._process(0.01)
+	z._process(0.2)
+	z._process(ZombieActor.ATTACK_HIT_TIME + 0.01)
 	check.call(npc.health == 88.0, "zombies can damage an NPC using the shared combat volume")
 	npc.take_damage(100)
 	check.call(ActorCombat.select_target(z, [npc], ActorCombat.direction(z), ActorCombat.ZOMBIE_REACH) == null, "dead NPCs cannot be attacked again")

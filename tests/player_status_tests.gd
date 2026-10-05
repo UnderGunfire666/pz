@@ -13,7 +13,15 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	state.advance(3600.0, 1.0)
 	check.call(state.survival.hunger < 100 and state.survival.thirst < state.survival.hunger
 		and state.survival.fatigue < 100 and state.survival.stamina < 100,
-		"hunger thirst fatigue and stamina use inverted reserve scales and deplete in game time")
+		"hunger thirst fatigue and sprint exertion use inverted reserve scales and deplete in game time")
+	var walking := SurvivalSystem.new()
+	walking.stamina = 50.0
+	walking.advance(10.0, 0.0)
+	var sprinting := SurvivalSystem.new()
+	sprinting.stamina = 50.0
+	sprinting.advance(10.0, 1.0)
+	check.call(walking.stamina > 50.0 and sprinting.stamina < 50.0,
+		"normal movement recovers stamina while sprint exertion consumes it")
 	var depleted := SurvivalSystem.new()
 	depleted.hunger = 0
 	depleted.thirst = 0

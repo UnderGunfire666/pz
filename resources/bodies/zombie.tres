@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="CharacterBodyProfile" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/character_body_profile.gd" id="1_wsygo"]
+
+[resource]
+script = ExtResource("1_wsygo")
+model_path = "res://assets/characters/mixamo/Zombie/Zombie.fbx"
+model_scale = 1.0155059090299523
+model_offset = Vector3(0, 0.0023311242, 0)
+regions = {
+"Head": AABB(-0.115, 1.5188519, -0.11793598, 0.23, 0.28114814, 0.26),
+"Left Arm": AABB(-0.37071815, 0.895392, -0.034809805, 0.24500646, 0.6404079, 0.1452888),
+"Left Foot": AABB(-0.26186562, 0, -0.26840076, 0.15265347, 0.16, 0.3425239),
+"Left Hand": AABB(-0.38285303, 0.7379473, -0.045516275, 0.13213487, 0.27744472, 0.13070646),
+"Left Leg": AABB(-0.24421212, 0.16, -0.0890221, 0.21904963, 0.9101991, 0.16814525),
+"Right Arm": AABB(0.12577242, 0.895392, -0.04026729, 0.24500638, 0.6404079, 0.14926317),
+"Right Foot": AABB(0.10927288, 0, -0.2674762, 0.15265326, 0.16, 0.34433007),
+"Right Hand": AABB(0.2507788, 0.7373848, -0.044748895, 0.13253127, 0.2780072, 0.1244816),
+"Right Leg": AABB(0.025223248, 0.16, -0.08886155, 0.21904963, 0.9101991, 0.17071544),
+"Torso": AABB(-0.19, 0.9501991, -0.1643589, 0.38, 0.56865275, 0.28)
+}
+joints = {
+"LeftArm": Vector3(-0.19071169, 1.4707999, 0.045478996),
+"LeftForeArm": Vector3(-0.23185174, 1.2005498, 0.045696948),
+"LeftHand": Vector3(-0.30571815, 0.960392, 0.030190194),
+"LeftHandMiddle3": Vector3(-0.32785302, 0.7929473, 0.009483726),
+"RightArm": Vector3(0.19077241, 1.4707999, 0.04399588),
+"RightForeArm": Vector3(0.23191243, 1.2005498, 0.044797372),
+"RightHand": Vector3(0.3057788, 0.960392, 0.024732709),
+"RightHandMiddle3": Vector3(0.32831007, 0.7923848, 0.010251105)
+}

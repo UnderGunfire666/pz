@@ -4,6 +4,10 @@ extends Node2D
 ## One survivor shares the player's world traversal and finite container stock.
 const MOVE_SPEED := 0.95
 const SEARCH_GAME_SECONDS := 90.0
+const ATTACK_ANIMATION_DURATION := 2.2666667
+const ATTACK_HIT_TIME := ATTACK_ANIMATION_DURATION * 0.46
+const ATTACK_MOVE_MULTIPLIER := 0.28
+const BACKWARD_MOVE_MULTIPLIER := 0.52
 
 var actor_id := "neighbour"
 var world_map: WorldMap
@@ -15,6 +19,8 @@ var stair_id := ""
 var facing_direction := Vector2.DOWN
 var look_pitch := 0.0
 var health := 100.0
+var body_health := ActorBody.healthy_regions()
+var last_hit_region := ""
 var attack_cooldown := 0.0
 var threat_memory_until := 0.0
 var threat_memory_position := Vector2.ZERO
@@ -33,6 +39,13 @@ var _navigation := LocalNavigation.new()
 var _logic_tick_elapsed := 0.0
 var last_hearing: Dictionary = {}
 var _footstep_distance := 0.0
+var visual_velocity := Vector2.ZERO
+var visual_damage_remaining := 0.0
+var visual_hit_region := ""
+var visual_attack_remaining := 0.0
+var visual_attack_id := 0
+var _attack_impact_remaining := -1.0
+var _attack_target: ZombieActor
 const DISTANT_LOGIC_TICK := 0.18
 
 
@@ -78,6 +91,12 @@ func _process(delta: float) -> void:
 		return
 	var scaled_delta := delta * simulation_scale
 	attack_cooldown = maxf(0.0, attack_cooldown - scaled_delta)
+	visual_attack_remaining = maxf(0.0, visual_attack_remaining - scaled_delta)
+	visual_damage_remaining = maxf(0.0, visual_damage_remaining - scaled_delta)
+	if _attack_impact_remaining >= 0.0:
+		_attack_impact_remaining -= scaled_delta
+		if _attack_impact_remaining <= 0.0:
+			_resolve_attack_impact()
 	var defended := _defend(scaled_delta)
 	var game_seconds := scaled_delta * GameTime.GAME_SECONDS_PER_REAL_SECOND
 	decision_cooldown -= scaled_delta
@@ -276,17 +295,23 @@ func cancel_current_task() -> void:
 func _move_toward_target(scaled_delta: float) -> void:
 	var previous := logical_position
 	var previous_point := ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.12)
+	var speed := MOVE_SPEED * (ATTACK_MOVE_MULTIPLIER if visual_attack_remaining > 0.0 else 1.0)
+	if not target_position.is_equal_approx(logical_position) and facing_direction.dot(logical_position.direction_to(target_position)) < -0.35:
+		speed *= BACKWARD_MOVE_MULTIPLIER
 	var result := _navigation.advance(world_map, logical_position, floor_level, stair_id,
-		target_position, target_floor, MOVE_SPEED, scaled_delta)
+		target_position, target_floor, speed, scaled_delta)
 	logical_position = result["position"]
 	floor_level = int(result["floor"])
 	stair_id = String(result["stair_id"])
 	if logical_position.distance_squared_to(previous) > 0.000001:
+		visual_velocity = (logical_position - previous) / maxf(0.00001, scaled_delta)
 		facing_direction = previous.direction_to(logical_position)
 		_footstep_distance += previous_point.distance_to(ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.12))
 		if _footstep_distance >= 0.75:
 			_footstep_distance = fmod(_footstep_distance, 0.75)
 			NoiseBus.emit_actor_noise(self, 2.2, "footsteps", 1.0, 0.12)
+	else:
+		visual_velocity = Vector2.ZERO
 
 
 func _nearest_zombie(max_range: float = 4.5) -> ZombieActor:
@@ -346,14 +371,45 @@ func _defend(delta: float) -> bool:
 	var eye := ActorPerception.point(world_map, logical_position, floor_level, stair_id, ActorPerception.EYE_HEIGHT)
 	if eye.distance_to(target) > ActorCombat.NPC_REACH: return false
 	ActorCombat.turn_toward(self, target, delta)
-	if attack_cooldown > 0.0 or ActorCombat.contact(self, threat, ActorCombat.direction(self), ActorCombat.NPC_REACH).is_empty(): return false
-	attack_cooldown = 1.2
-	threat.take_damage(1)
+	if attack_cooldown > 0.0 or _attack_impact_remaining >= 0.0 or ActorCombat.contact(self, threat, ActorCombat.direction(self), ActorCombat.NPC_REACH).is_empty(): return false
+	attack_cooldown = ATTACK_ANIMATION_DURATION
+	visual_attack_remaining = ATTACK_ANIMATION_DURATION
+	visual_attack_id += 1
+	_attack_impact_remaining = ATTACK_HIT_TIME
+	_attack_target = threat
 	NoiseBus.emit_actor_noise(self, 3.0, "struggle")
 	_search_progress = 0.0
 	return true
 
 
+func _resolve_attack_impact() -> void:
+	_attack_impact_remaining = -1.0
+	var threat := _attack_target
+	_attack_target = null
+	if not is_instance_valid(threat) or threat.is_queued_for_deletion(): return
+	var hit := ActorCombat.contact(self, threat, ActorCombat.direction(self), ActorCombat.NPC_REACH)
+	if not hit.is_empty():
+		threat.receive_hit(1, hit["region"])
+		ActorCombat.apply_hit_recoil(threat, logical_position.direction_to(threat.logical_position), 0.12)
+
+
+func receive_hit(amount: float, region: String) -> void:
+	if amount <= 0.0 or health <= 0.0 or region not in PlayerState.BODY_REGIONS:
+		return
+	last_hit_region = region
+	visual_hit_region = region
+	visual_damage_remaining = 0.28
+	body_health[region] = maxf(0.0, float(body_health[region]) - amount)
+	take_damage(amount)
+
+
 func take_damage(amount: float) -> void:
 	health = maxf(0.0, health - maxf(0.0, amount))
+	interrupt_attack()
 	cancel_current_task()
+
+
+func interrupt_attack() -> void:
+	_attack_impact_remaining = -1.0
+	visual_attack_remaining = 0.0
+	attack_cooldown = maxf(attack_cooldown, 0.18)
