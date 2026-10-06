@@ -377,7 +377,7 @@ func _defend(delta: float) -> bool:
 	visual_attack_id += 1
 	_attack_impact_remaining = ATTACK_HIT_TIME
 	_attack_target = threat
-	NoiseBus.emit_actor_noise(self, 3.0, "struggle")
+	NoiseBus.emit_action_noise(self, "npc_attack")
 	_search_progress = 0.0
 	return true
 

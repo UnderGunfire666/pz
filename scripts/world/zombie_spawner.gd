@@ -79,7 +79,7 @@ func _process(delta: float) -> void:
 func _request_one_migration() -> bool:
 	var area_counts := population_by_area()
 	for zombie in active_zombies:
-		if not is_instance_valid(zombie) or zombie.health <= 0 or zombie.awareness != ZombieActor.Awareness.IDLE: continue
+		if not is_instance_valid(zombie) or zombie.health <= 0 or zombie.awareness not in [ZombieActor.Awareness.IDLE, ZombieActor.Awareness.WANDER]: continue
 		var source := area_catalog.area(world_map.zombie_area_id_at(zombie.logical_position, zombie.floor_level))
 		if source == null: continue
 		var destinations: Array[Dictionary] = []
@@ -151,11 +151,12 @@ func _refresh_simulation_range() -> void:
 		var limit := active_radius + (2.0 if zombie.is_processing() else 0.0)
 		var nearby := zombie.logical_position.distance_squared_to(player.logical_position) + floor_distance * floor_distance <= limit * limit
 		zombie.set_simulation_active(nearby)
-		# Only distant idle actors use a coarse decision tick. Pursuit, combat and
-		# anything in the immediate playable bubble remain frame-rate responsive.
+		# Distant idle and wander movement uses a coarse decision tick. Pursuit,
+		# combat and the immediate playable bubble remain frame-rate responsive.
 		if nearby:
 			var horizontal_distance := zombie.logical_position.distance_to(player.logical_position)
-			zombie.set_logic_tick_interval(0.18 if not zombie.has_target and horizontal_distance > 10.0 else 0.0)
+			var can_tick_coarsely := zombie.awareness in [ZombieActor.Awareness.IDLE, ZombieActor.Awareness.WANDER]
+			zombie.set_logic_tick_interval(0.18 if can_tick_coarsely and horizontal_distance > 10.0 else 0.0)
 
 
 func clear_population() -> void:

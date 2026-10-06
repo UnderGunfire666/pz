@@ -96,7 +96,7 @@ func _process(delta: float) -> void:
 			_footstep_distance += previous_point.distance_to(ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.12))
 			if _footstep_distance >= 0.75:
 				_footstep_distance = fmod(_footstep_distance, 0.75)
-				NoiseBus.emit_actor_noise(self, 4.3 if sprinting else 2.2, "footsteps", 1.0, 0.12)
+				NoiseBus.emit_action_noise(self, "player_sprint" if sprinting else "player_walk")
 			moved.emit(logical_position)
 		else:
 			_last_exertion = 0.0
@@ -124,7 +124,7 @@ func try_attack() -> void:
 	visual_attack_id += 1
 	visual_attack_remaining = ATTACK_ANIMATION_DURATION
 	_attack_impact_remaining = ATTACK_HIT_TIME
-	NoiseBus.emit_actor_noise(self, 4.4, "melee strike")
+	NoiseBus.emit_action_noise(self, "player_melee_swing")
 
 
 func interrupt_attack() -> void:

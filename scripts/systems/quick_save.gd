@@ -3,8 +3,9 @@ extends RefCounted
 
 ## A single versioned local slot. Only primitive Variant data is decoded.
 ## Pack steps resume from saved progress; other actions stop with search progress retained.
-const VERSION := 11
-const PATH := "user://afterlight_mvp_v11.save"
+const VERSION := 12
+const PATH := "user://afterlight_mvp_v12.save"
+const LEGACY_PATH_V11 := "user://afterlight_mvp_v11.save"
 const LEGACY_PATH_V10 := "user://afterlight_mvp_v10.save"
 const LEGACY_PATH_V9 := "user://afterlight_mvp_v9.save"
 const LEGACY_PATH_V8 := "user://afterlight_mvp_v8.save"
@@ -44,7 +45,8 @@ static func save_game(game: MVPGameRoot, path: String = PATH) -> bool:
 
 static func load_game(game: MVPGameRoot, path: String = PATH) -> bool:
 	if path == PATH and not FileAccess.file_exists(path):
-		if FileAccess.file_exists(LEGACY_PATH_V10): path = LEGACY_PATH_V10
+		if FileAccess.file_exists(LEGACY_PATH_V11): path = LEGACY_PATH_V11
+		elif FileAccess.file_exists(LEGACY_PATH_V10): path = LEGACY_PATH_V10
 		elif FileAccess.file_exists(LEGACY_PATH_V9): path = LEGACY_PATH_V9
 		elif FileAccess.file_exists(LEGACY_PATH_V8): path = LEGACY_PATH_V8
 		elif FileAccess.file_exists(LEGACY_PATH_V7): path = LEGACY_PATH_V7
@@ -138,6 +140,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if data.get("version") == 8: data = _migrate_v8(data)
 	if data.get("version") == 9: data = _migrate_v9(data)
 	if data.get("version") == 10: data = _migrate_v10(data)
+	if data.get("version") == 11: data = _migrate_v11(data)
 	data = _migrate_cabinet_layout(data, game.world_map)
 	if not data.get("cabinet_layout") is int or data["cabinet_layout"] != 1: return false
 	if not _compatible_map_identity(data.get("map_identity"), map_identity(game.world_map.definition)):
@@ -286,6 +289,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	if data.get("version") == 8: data = _migrate_v8(data)
 	if data.get("version") == 9: data = _migrate_v9(data)
 	if data.get("version") == 10: data = _migrate_v10(data)
+	if data.get("version") == 11: data = _migrate_v11(data)
 	data = _migrate_cabinet_layout(data, game.world_map)
 	if not validate(data, game): return
 	game.interactions.interrupt_action("Loading")
@@ -593,13 +597,33 @@ static func _migrate_v9(source: Dictionary) -> Dictionary:
 
 static func _migrate_v10(source: Dictionary) -> Dictionary:
 	var data := source.duplicate(true)
-	data["version"] = VERSION
+	data["version"] = 11
 	# Old saves did not record wound locations on zombies. Preserve their total
 	# health without inventing a historical injury location. Source stays intact.
 	if data.get("zombies") is Array:
 		for entry in data["zombies"]:
 			if entry is Dictionary and not entry.has("body_health"):
 				entry["body_health"] = ActorBody.healthy_regions()
+	return _migrate_v11(data)
+
+
+static func _migrate_v11(source: Dictionary) -> Dictionary:
+	var data := source.duplicate(true)
+	data["version"] = VERSION
+	var now := float(data.get("clock", 0.0))
+	if data.get("zombies") is Array:
+		for entry in data["zombies"]:
+			if not entry is Dictionary: continue
+			var perception: Dictionary = entry.get("perception", {})
+			if perception.is_empty(): continue
+			perception["wander_next_game_seconds"] = float(perception.get("wander_next_game_seconds", now + 20.0))
+			var saved_position: Variant = entry.get("position", Vector2.ZERO)
+			var position: Vector2 = saved_position if saved_position is Vector2 else Vector2.ZERO
+			var saved_floor: Variant = entry.get("floor", 0)
+			var floor := int(saved_floor) if saved_floor is int else 0
+			var fallback_seed := int(absf(position.x * 92821.0 + position.y * 68917.0 + float(floor) * 19391.0)) % 2147483646 + 1
+			perception["wander_seed"] = maxi(1, int(perception.get("wander_seed", fallback_seed)))
+			entry["perception"] = perception
 	return data
 
 static func _valid_zombie_perception(data: Variant) -> bool:
@@ -607,13 +631,14 @@ static func _valid_zombie_perception(data: Variant) -> bool:
 	if float(data.get("last_heard_strength", 0.0)) < 0.0: return false
 	if not data is Dictionary or not data.has_all(["awareness", "target_actor_id", "visual_memory_expires_at",
 		"sound_memory_expires_at", "search_expires_at", "stimulus_lock_until", "last_stimulus_time",
-		"last_stimulus_loudness", "migration_area_id", "facing"]): return false
-	if not data["awareness"] is int or data["awareness"] < ZombieActor.Awareness.IDLE or data["awareness"] > ZombieActor.Awareness.MIGRATION: return false
+		"last_stimulus_loudness", "migration_area_id", "wander_next_game_seconds", "wander_seed", "facing"]): return false
+	if not data["awareness"] is int or data["awareness"] < ZombieActor.Awareness.IDLE or data["awareness"] > ZombieActor.Awareness.WANDER: return false
+	if not data["wander_seed"] is int or data["wander_seed"] < 1: return false
 	if not data["target_actor_id"] is String or not data["migration_area_id"] is String or not data["facing"] is Vector2: return false
 	if not data["facing"].is_finite(): return false
 	if not _number(data.get("look_pitch", 0.0)) or absf(float(data.get("look_pitch", 0.0))) > PI * 0.5: return false
 	if not data.get("target_stair_id", "") is String: return false
-	for key in ["visual_memory_expires_at", "sound_memory_expires_at", "search_expires_at", "stimulus_lock_until", "last_stimulus_time", "last_stimulus_loudness"]:
+	for key in ["visual_memory_expires_at", "sound_memory_expires_at", "search_expires_at", "stimulus_lock_until", "last_stimulus_time", "last_stimulus_loudness", "wander_next_game_seconds", "wander_seed"]:
 		if not _number(data[key]): return false
 	return true
 

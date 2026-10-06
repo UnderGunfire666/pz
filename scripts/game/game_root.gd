@@ -303,6 +303,7 @@ func _on_player_attack(_attack_position: Vector2, direction: Vector2) -> void:
 		hit_anything = true
 	if hit_anything:
 		if weapon != null:
+			NoiseBus.emit_action_noise(player, "player_melee_hit")
 			combat_feedback.play_bat_impact()
 			world_3d_view.play_hit_camera_shake()
 		show_notification("%s hit: %s." % [inventory.attack_type().capitalize(), nearest.last_hit_region])

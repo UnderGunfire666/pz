@@ -178,9 +178,9 @@ func request_interaction() -> void:
 		var open := not bool(barrier["open"])
 		if world_map.set_barrier_open(barrier["id"], open):
 			var sound_position: Vector2 = (Vector2(barrier["start"]) + Vector2(barrier["end"])) * 0.5
-			NoiseBus.emit_spatial_noise(world_map, ActorPerception.point(world_map, sound_position,
-				int(barrier["level"]), "", ActorPerception.CHEST_HEIGHT), 3.5,
-				String(barrier["kind"]), int(barrier["level"]), 1.0, "", player.get_instance_id())
+			NoiseBus.emit_action_noise_at(world_map, ActorPerception.point(world_map, sound_position,
+				int(barrier["level"]), "", ActorPerception.CHEST_HEIGHT), String(barrier["kind"]),
+				int(barrier["level"]), player.get_instance_id())
 			if not open:
 				player.logical_position = world_map.resolve_closed_barrier_overlap(
 					barrier["id"], player.logical_position, player.floor_level,
@@ -320,7 +320,7 @@ func _start_container_search(point: Dictionary) -> void:
 		return
 	_start_action("search", "Searching %s" % container.display_name, container.search_duration_game_seconds,
 		point, maxf(0.0, container.search_duration_game_seconds - container.search_progress_seconds))
-	NoiseBus.emit_actor_noise(player, 2.5, "searching")
+	NoiseBus.emit_action_noise(player, "player_search")
 
 
 func _open_searched_container(container: ContainerData) -> void:

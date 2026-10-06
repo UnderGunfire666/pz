@@ -4,7 +4,7 @@ extends Node2D
 signal died(zombie: ZombieActor)
 signal attacked_player(world_position: Vector2)
 
-enum Awareness { IDLE, VISUAL, VISUAL_MEMORY, SOUND, GROUP, SEARCH, MIGRATION }
+enum Awareness { IDLE, VISUAL, VISUAL_MEMORY, SOUND, GROUP, SEARCH, MIGRATION, WANDER }
 
 const MOVE_SPEED := 0.58
 const VISUAL_RANGE := 9.6
@@ -18,6 +18,11 @@ const ATTACK_ANIMATION_DURATION := 2.633
 const ATTACK_HIT_TIME := ATTACK_ANIMATION_DURATION * 0.46
 const ATTACK_MOVE_MULTIPLIER := 0.28
 const BACKWARD_MOVE_MULTIPLIER := 0.52
+const WANDER_MIN_DISTANCE := 4.0
+const WANDER_MAX_DISTANCE := 10.0
+const WANDER_MIN_WAIT_GAME_SECONDS := 20.0
+const WANDER_MAX_WAIT_GAME_SECONDS := 45.0
+const WANDER_CANDIDATE_ATTEMPTS := 12
 
 var world_map: WorldMap
 var player: PlayerController
@@ -49,6 +54,8 @@ var last_stimulus_loudness := 0.0
 var last_heard_strength := 0.0
 var last_hearing: Dictionary = {}
 var migration_area_id := ""
+var wander_next_game_seconds := 0.0
+var wander_seed := 1
 var _perception_game_seconds_left := 0.0
 var _search_step := 0
 var _damage_flash_left := 0.0
@@ -71,6 +78,8 @@ func setup(p_world_map: WorldMap, p_player: PlayerController, p_player_state: Pl
 	floor_level = start_floor
 	target_position = start_position
 	target_floor = start_floor
+	wander_seed = _wander_seed_for(start_position, start_floor)
+	_schedule_next_wander()
 	add_to_group("zombies")
 	if simulation_active and not NoiseBus.noise_emitted.is_connected(hear_noise):
 		NoiseBus.noise_emitted.connect(hear_noise)
@@ -116,6 +125,7 @@ func _process(delta: float) -> void:
 		_perception_game_seconds_left = _rule("perception_interval_game_seconds", 1.5)
 		_update_perception()
 	_update_memory()
+	_update_idle_wander()
 	var target_point := ActorPerception.point(world_map, target_position, target_floor, target_stair_id, ActorPerception.CHEST_HEIGHT)
 	if has_target:
 		ActorCombat.turn_toward(self, target_point, scaled_delta, TURN_SPEED)
@@ -137,7 +147,7 @@ func _process(delta: float) -> void:
 		visual_attack_id += 1
 		_attack_target = victim
 		_attack_impact_remaining = ATTACK_HIT_TIME
-		NoiseBus.emit_actor_noise(self, 3.0, "struggle")
+		NoiseBus.emit_action_noise(self, "zombie_attack")
 
 
 func _update_perception() -> void:
@@ -197,6 +207,7 @@ func _update_memory() -> void:
 func _reached_target() -> void:
 	match awareness:
 		Awareness.MIGRATION: _clear_target()
+		Awareness.WANDER: _clear_target()
 		Awareness.VISUAL: pass # Hold contact until the next perception sample updates or loses it.
 		Awareness.VISUAL_MEMORY, Awareness.SOUND, Awareness.GROUP: _begin_search()
 		Awareness.SEARCH: _set_next_search_point()
@@ -245,9 +256,16 @@ func hear_noise(stimulus: NoiseStimulus) -> void:
 	if stimulus == null or stimulus.world_time < last_stimulus_time: return
 	var heard := ActorHearing.sample(world_map, self, stimulus, now)
 	if heard.is_empty(): return
+	if float(heard["strength"]) < _rule("hearing_threshold", 0.55): return
 	# A last visual observation remains stronger evidence during its switch lock.
-	if now < stimulus_lock_until:
-		if awareness == Awareness.VISUAL_MEMORY or float(heard["strength"]) <= last_heard_strength * 1.25: return
+	# While investigating sound, a fresh sound replaces the old clue immediately.
+	if now < stimulus_lock_until and awareness == Awareness.VISUAL_MEMORY:
+		return
+	if stimulus.world_time == last_stimulus_time and not last_hearing.is_empty():
+		var previous_position: Vector2 = last_hearing.get("position", Vector2.INF)
+		if String(last_hearing.get("event_type", "")) == String(heard["event_type"]) \
+			and previous_position.distance_to(heard["position"]) < 0.2:
+			return
 	if stair_id.is_empty() and (target_floor != int(heard["floor"]) or target_position.distance_to(heard["position"]) > 0.2): reset_navigation()
 	target_position = heard["position"]
 	target_floor = int(heard["floor"])
@@ -278,7 +296,7 @@ func observe_group_target(position: Vector2, floor: int, observed_at: float, obs
 
 
 func request_migration(position: Vector2, floor: int, area_id: String) -> bool:
-	if awareness != Awareness.IDLE or has_target: return false
+	if awareness not in [Awareness.IDLE, Awareness.WANDER]: return false
 	target_position = position
 	target_floor = floor
 	target_stair_id = ""
@@ -298,6 +316,55 @@ func _clear_target() -> void:
 	target_stair_id = ""
 	migration_area_id = ""
 	reset_navigation()
+	_schedule_next_wander()
+
+
+func _update_idle_wander() -> void:
+	if awareness != Awareness.IDLE or has_target or GameTime.elapsed_game_seconds < wander_next_game_seconds:
+		return
+	var selected: Dictionary = {}
+	var selected_score := -INF
+	for _attempt in range(WANDER_CANDIDATE_ATTEMPTS):
+		var angle := _next_wander_random() * TAU
+		var distance := lerpf(WANDER_MIN_DISTANCE, WANDER_MAX_DISTANCE, _next_wander_random())
+		var candidate := logical_position + Vector2(cos(angle), sin(angle)) * distance
+		if not world_map.can_stand(candidate, floor_level):
+			continue
+		if world_map.find_path(logical_position, floor_level, candidate, floor_level).is_empty():
+			continue
+		# Pressure is authored world data. It gives idle movement a loose tendency
+		# toward inhabited areas without replacing normal path validation.
+		var score := world_map.pressure_at(candidate, floor_level) + _next_wander_random() * 0.35
+		if score > selected_score:
+			selected = {"position": candidate, "floor": floor_level}
+			selected_score = score
+	if selected.is_empty():
+		_schedule_next_wander()
+		return
+	target_position = selected["position"]
+	target_floor = int(selected["floor"])
+	target_stair_id = ""
+	target_actor_id = ""
+	awareness = Awareness.WANDER
+	has_target = true
+	reset_navigation()
+
+
+func _schedule_next_wander() -> void:
+	wander_next_game_seconds = GameTime.elapsed_game_seconds + lerpf(
+		WANDER_MIN_WAIT_GAME_SECONDS, WANDER_MAX_WAIT_GAME_SECONDS, _next_wander_random())
+
+
+func _wander_seed_for(position: Vector2, floor: int) -> int:
+	var seed := int(absf(position.x * 92821.0 + position.y * 68917.0 + float(floor) * 19391.0)) % 2147483646
+	return seed + 1
+
+
+func _next_wander_random() -> float:
+	wander_seed = (wander_seed * 48271) % 2147483647
+	if wander_seed <= 0:
+		wander_seed = 1
+	return float(wander_seed) / 2147483647.0
 
 
 func _can_hit_player() -> bool:
@@ -401,7 +468,8 @@ func perception_save_data() -> Dictionary:
 		"search_expires_at": search_expires_at, "stimulus_lock_until": stimulus_lock_until,
 		"last_stimulus_time": last_stimulus_time, "last_stimulus_loudness": last_stimulus_loudness,
 		"last_heard_strength": last_heard_strength,
-		"migration_area_id": migration_area_id, "facing": facing_direction, "look_pitch": look_pitch}
+		"migration_area_id": migration_area_id, "wander_next_game_seconds": wander_next_game_seconds,
+		"wander_seed": wander_seed, "facing": facing_direction, "look_pitch": look_pitch}
 
 
 func load_perception_save_data(data: Dictionary) -> void:
@@ -417,5 +485,7 @@ func load_perception_save_data(data: Dictionary) -> void:
 	last_heard_strength = float(data.get("last_heard_strength", 0.0))
 	last_hearing = {}
 	migration_area_id = data["migration_area_id"]
+	wander_next_game_seconds = float(data.get("wander_next_game_seconds", GameTime.elapsed_game_seconds))
+	wander_seed = maxi(1, int(data.get("wander_seed", 1)))
 	facing_direction = data["facing"]
 	look_pitch = float(data.get("look_pitch", 0.0))

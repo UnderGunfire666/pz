@@ -11,6 +11,7 @@ extends Resource
 @export_range(0.1, 10.0, 0.1) var perception_interval_game_seconds := 1.5
 @export_range(1.0, 600.0, 1.0) var visual_memory_game_seconds := 90.0
 @export_range(1.0, 600.0, 1.0) var sound_memory_game_seconds := 55.0
+@export_range(0.0, 10.0, 0.05) var hearing_threshold := 0.55
 @export_range(1.0, 600.0, 1.0) var search_game_seconds := 35.0
 @export_range(0.0, 60.0, 0.5) var stimulus_switch_lock_game_seconds := 6.0
 @export_range(1.0, 1440.0, 1.0) var migration_interval_game_minutes := 30.0

@@ -11,6 +11,7 @@ sight_half_angle_degrees = 72.0
 perception_interval_game_seconds = 1.5
 visual_memory_game_seconds = 90.0
 sound_memory_game_seconds = 55.0
+hearing_threshold = 0.55
 search_game_seconds = 35.0
 stimulus_switch_lock_game_seconds = 6.0
 migration_interval_game_minutes = 30.0

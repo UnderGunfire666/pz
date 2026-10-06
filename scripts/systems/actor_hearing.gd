@@ -6,7 +6,7 @@ extends RefCounted
 const MAX_EVENT_AGE := 6.0
 const MEMORY_SECONDS := 45.0
 const SWITCH_LOCK_SECONDS := 6.0
-const DANGER_CATEGORIES := ["struggle", "melee strike", "gunshot", "explosion"]
+const DANGER_CATEGORIES := ["struggle", "melee strike", "melee impact", "gunshot", "explosion"]
 
 
 static func sample(map: WorldMap, listener: Node, stimulus: NoiseStimulus,
