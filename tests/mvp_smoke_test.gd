@@ -47,6 +47,7 @@ func _run() -> void:
 	# The remainder of the legacy regression fixture exercises an empty starting
 	# inventory. The running game still retains the default bat above.
 	game.inventory.contents("two_hands").clear()
+	for slot: String in InventoryGrid.CLOTHING_SLOTS: game.inventory.contents(slot).clear()
 	game.inventory.revision += 1
 	await get_tree().process_frame
 	game.player_state.character.select_build(game.character_catalog.rules.default_occupation_id, [])
@@ -69,9 +70,13 @@ func _run() -> void:
 	preload("res://tests/combat_navigation_tests.gd").run(game, _expect)
 	preload("res://tests/body_part_tests.gd").run(game, _expect)
 	preload("res://tests/full_body_tests.gd").run(game, _expect)
+	# Several save/editor fixtures intentionally pause their restored world. Each
+	# following gameplay fixture owns a normal-speed simulation baseline.
+	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	preload("res://tests/mixamo_animation_tests.gd").run(game, _expect)
 	preload("res://tests/cabinet_tests.gd").run(game, _expect)
 	WorldStreamingTests.run(game, _expect)
+	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	_test_barrier_rendering()
 	_test_visibility_and_combat()
 	_test_actions_and_inventory()
@@ -418,6 +423,13 @@ func _test_actions_and_inventory() -> void:
 
 
 func _test_npc_and_paths() -> void:
+	# This fixture checks resource use, so put its unrelated, disabled zombie
+	# population to sleep instead of leaving it as an active visual threat.
+	for zombie: ZombieActor in game.zombie_spawner.active_zombies:
+		zombie.set_simulation_active(false)
+	game.npc.threat_memory_until = 0.0
+	game.npc.brain.last_noise_danger = false
+	game.npc.brain.noise_memory_until = 0.0
 	game.npc.logical_position = Vector2(3.5, 10.5)
 	game.npc.floor_level = 0
 	game.npc.stair_id = ""

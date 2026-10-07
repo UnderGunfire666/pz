@@ -1,4 +1,5 @@
 # Normalize EOL for all files that Git considers text files.
 * text=auto eol=lf
+assets/Clothes/**/*.gltf filter=lfs diff=lfs merge=lfs -text
 assets/characters/mixamo/Zombie/Zombie.fbx filter=lfs diff=lfs merge=lfs -text
 assets/Clothes/**/*.gltf filter=lfs diff=lfs merge=lfs -text

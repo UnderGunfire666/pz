@@ -51,3 +51,22 @@ func query(level: int, bounds: Rect2) -> Array:
 	var result: Array = []
 	for id: int in ids: result.append(values[id])
 	return result
+
+
+func query_candidates(level: int, bounds: Rect2) -> Array:
+	## Broad-phase candidates for predicates where duplicates do not change the
+	## answer. Unlike query(), this intentionally avoids deduplication and
+	## sorting, which keeps repeated short navigation corridor checks cheap.
+	var values: Array = _values.get(level, [])
+	if values.is_empty(): return []
+	var rect := bounds.abs().grow(EDGE_PADDING)
+	var start := Vector2i((rect.position / CELL_SIZE).floor())
+	var end := Vector2i((rect.end / CELL_SIZE).floor())
+	if (end.x - start.x + 1) * (end.y - start.y + 1) > values.size():
+		return values
+	var result: Array = []
+	for y in range(start.y, end.y + 1):
+		for x in range(start.x, end.x + 1):
+			for id: int in _cells.get(Vector3i(x, y, level), []):
+				result.append(values[id])
+	return result

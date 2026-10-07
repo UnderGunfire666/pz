@@ -43,6 +43,9 @@ var _spatial_index_ready := false
 var _path_cache: Dictionary = {}
 var _path_cache_revision := -1
 var path_cache_hits := 0
+## Last full graph-build breakdown. This is diagnostic data only; navigation
+## remains synchronous and its graph semantics are unchanged.
+var navigation_timings_ms: Dictionary = {}
 
 
 func _ready() -> void:
@@ -537,7 +540,9 @@ func can_stand(pos: Vector2, level: int = 0) -> bool:
 
 
 func _inside_stair_body(pos: Vector2, level: int, margin: float = 0.0) -> bool:
-	for link: StairLink in query_stairs(level, Rect2(pos, Vector2.ZERO).grow(margin)):
+	# This is also an existential test, so stair candidates do not need the
+	# stable, deduplicated ordering used by public query_stairs().
+	for link: StairLink in _stair_index.query_candidates(level, Rect2(pos, Vector2.ZERO).grow(margin)):
 		if level != link.from_floor and level != link.to_floor:
 			continue
 		var offset := pos - link.start
@@ -558,7 +563,11 @@ func _valid_position(pos: Vector2, level: int, radius: float = ACTOR_RADIUS) -> 
 
 
 func _supported_position(pos: Vector2, level: int, radius: float = ACTOR_RADIUS) -> bool:
-	if not is_walkable(pos, level) or _inside_stair_body(pos, level, radius):
+	# The radius-aware stair test already includes is_walkable's zero-margin
+	# stair test. Avoiding that duplicate indexed lookup matters while building
+	# thousands of navigation edges.
+	var center_tile := get_tile(pos, level)
+	if center_tile == null or not center_tile.walkable or _inside_stair_body(pos, level, radius):
 		return false
 	for offset in [Vector2(radius, 0), Vector2(-radius, 0), Vector2(0, radius), Vector2(0, -radius)]:
 		var tile := get_tile(pos + offset, level)
@@ -765,7 +774,10 @@ func _segment_has_wall_clearance(from: Vector2, to: Vector2, level: int) -> bool
 	# Exact segment clearance avoids sampling past a short wall endpoint. Check
 	# each candidate wall once, rather than once for every terrain support probe.
 	var corridor := Rect2(from, Vector2.ZERO).expand(to).grow(ACTOR_RADIUS)
-	for face in query_walls(level, corridor):
+	# This is an existential collision test. Candidate duplication cannot change
+	# the result, so use the index's unsorted broad phase instead of allocating
+	# and sorting a unique result for every short graph edge.
+	for face in _wall_index.query_candidates(level, corridor):
 		var a: Vector2 = face["start"]
 		var b: Vector2 = face["end"]
 		if not corridor.intersects(Rect2(a, Vector2.ZERO).expand(b), true):
@@ -883,6 +895,7 @@ func _refresh_navigation_near_barrier(barrier: Dictionary) -> void:
 
 
 func _build_navigation() -> void:
+	var started_usec := Time.get_ticks_usec()
 	_path_cache.clear()
 	_navigation.clear()
 	_nav_points.clear()
@@ -897,9 +910,14 @@ func _build_navigation() -> void:
 				if _valid_position(pos, level):
 					var id := _add_nav_point(pos, level)
 					_nav_grid_ids[Vector3i(x, y, level)] = id
+	navigation_timings_ms["nodes"] = float(Time.get_ticks_usec() - started_usec) / 1000.0
 	# Each grid key is visited exactly once. Previously every completed floor
 	# re-scanned every earlier floor and skipped it after the fact.
 	_last_navigation_grid_entries_scanned = _nav_grid_ids.size()
+	var support_usec := 0
+	var clearance_usec := 0
+	var edge_candidates := 0
+	var connected_edges := 0
 	for key: Vector3i in _nav_grid_ids:
 		var from_id := int(_nav_grid_ids[key])
 		var from: Vector2 = _nav_points[from_id]["position"]
@@ -909,8 +927,24 @@ func _build_navigation() -> void:
 				continue
 			var to_id := int(_nav_grid_ids[neighbour_key])
 			var to: Vector2 = _nav_points[to_id]["position"]
-			if _nav_grid_neighbours_connect(from, to, key.z):
+			edge_candidates += 1
+			var support_started_usec := Time.get_ticks_usec()
+			var supported := _segment_has_support(from, to, key.z, NAV_NEIGHBOUR_SUPPORT_STEP, false)
+			support_usec += Time.get_ticks_usec() - support_started_usec
+			if not supported:
+				continue
+			var clearance_started_usec := Time.get_ticks_usec()
+			var clear := _segment_has_wall_clearance(from, to, key.z)
+			clearance_usec += Time.get_ticks_usec() - clearance_started_usec
+			if clear:
 				_navigation.connect_points(from_id, to_id)
+				connected_edges += 1
+	navigation_timings_ms["edges"] = float(Time.get_ticks_usec() - started_usec) / 1000.0 - float(navigation_timings_ms["nodes"])
+	navigation_timings_ms["edge_support"] = float(support_usec) / 1000.0
+	navigation_timings_ms["edge_clearance"] = float(clearance_usec) / 1000.0
+	navigation_timings_ms["edge_candidates"] = edge_candidates
+	navigation_timings_ms["edge_connected"] = connected_edges
+	var stairs_started_usec := Time.get_ticks_usec()
 	for link: StairLink in stairs.values():
 		var low := _add_nav_point(link.start, link.from_floor)
 		var high := _add_nav_point(link.end, link.to_floor)
@@ -921,6 +955,10 @@ func _build_navigation() -> void:
 		_connect_stair_landing(high, link.end, link.to_floor)
 	for pair in _stair_node_pairs:
 		_navigation.connect_points(pair.x, pair.y)
+	navigation_timings_ms["stairs"] = float(Time.get_ticks_usec() - stairs_started_usec) / 1000.0
+	navigation_timings_ms["total"] = float(Time.get_ticks_usec() - started_usec) / 1000.0
+	print("[Navigation] nodes: %.2f ms; edges: %.2f ms (support %.2f, clearance %.2f; %d/%d connected); stairs: %.2f ms; total: %.2f ms" % [
+		navigation_timings_ms["nodes"], navigation_timings_ms["edges"], navigation_timings_ms["edge_support"], navigation_timings_ms["edge_clearance"], navigation_timings_ms["edge_connected"], navigation_timings_ms["edge_candidates"], navigation_timings_ms["stairs"], navigation_timings_ms["total"]])
 
 
 func _connect_stair_landing(stair_node: int, position: Vector2, level: int) -> void:

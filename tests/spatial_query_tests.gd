@@ -80,6 +80,9 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	check.call(boundary.has("long_wall") and not boundary.has("upper_wall"), "spatial bins preserve exact wall boundaries and floor isolation")
 	var long_query := index.query(0, Rect2(Vector2(3.9, -4), Vector2(0.2, 16)))
 	check.call(long_query.count("long_wall") == 1, "multi-bin wall is returned only once for sound attenuation")
+	var fast_long_query := index.query_candidates(0, Rect2(Vector2(3.9, -4), Vector2(0.2, 16)))
+	check.call(fast_long_query.has("long_wall") and not fast_long_query.has("upper_wall"),
+		"navigation spatial candidates preserve relevant walls and floor isolation")
 	check.call(index.query(0, Rect2(Vector2(-2, -2), Vector2.ZERO)).has("negative_diagonal"), "spatial bins use floor division for negative coordinates")
 	check.call(boundary.size() < 5, "local spatial query excludes remote city walls")
 	index.clear()

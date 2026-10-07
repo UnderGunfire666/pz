@@ -55,6 +55,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	var npc := SurvivorNPC.new()
 	game.actor_layer.add_child(npc)
 	npc.world_map = map
+	npc.player = p
 	npc.logical_position = p.logical_position
 	npc.facing_direction = Vector2.DOWN
 	game.actor_layer.add_child(z)
@@ -66,16 +67,33 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	check.call(z.health == 1, "NPC applies its directional attack in the collision window")
 	npc._defend(0.1)
 	check.call(z.health == 1, "NPC defense respects attack cooldown")
+	# This local combat fixture owns the target set. Keep live-map actors out of
+	# the global group while validating the NPC branch.
+	var previous_targets := game.get_tree().get_nodes_in_group("zombie_targets")
+	for previous_target in previous_targets:
+		previous_target.remove_from_group("zombie_targets")
 	npc.add_to_group("zombie_targets")
+	# The previous confirmed NPC hit applies recoil to both actors. Re-establish
+	# the documented one-unit attack spacing before exercising zombie retaliation.
+	z.logical_position = npc.logical_position + Vector2(0, 1.0)
+	z.floor_level = npc.floor_level
+	z.stair_id = npc.stair_id
+	z.facing_direction = Vector2.UP
+	z.has_target = false
+	z.awareness = ZombieActor.Awareness.IDLE
+	z.target_actor_id = ""
+	z.wander_next_game_seconds = INF
 	# Keep the NPC and zombie in the player's three-tile active collision bubble,
 	# while placing the player behind the zombie's current attack direction.
-	p.logical_position = Vector2(3, 6)
+	p.logical_position = npc.logical_position + Vector2(0, 2.0)
 	z.player = p
 	z.player_state = game.player_state
 	z._perception_game_seconds_left = 100
 	z._process(0.2)
 	z._process(ZombieActor.ATTACK_HIT_TIME + 0.01)
 	check.call(npc.health == 88.0, "zombies can damage an NPC using the shared combat volume")
+	for previous_target in previous_targets:
+		if is_instance_valid(previous_target): previous_target.add_to_group("zombie_targets")
 	npc.take_damage(100)
 	check.call(ActorCombat.select_target(z, [npc], ActorCombat.direction(z), ActorCombat.ZOMBIE_REACH) == null, "dead NPCs cannot be attacked again")
 	npc.free()
