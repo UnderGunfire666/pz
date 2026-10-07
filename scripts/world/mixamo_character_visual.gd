@@ -1,8 +1,7 @@
 class_name MixamoCharacterVisual
 extends Node3D
 
-## Static relaxed pose until animation assets are supplied. Calibration is baked
-## alongside authoritative body volumes by tools/bake_character_bodies.gd.
+## Animated rendering only. Clothing uses the same skeleton as the body.
 var skeleton: Skeleton3D
 var meshes: Array[MeshInstance3D] = []
 # Full-body player used outside the ready stance.
@@ -16,8 +15,11 @@ var _profile: CharacterBodyProfile
 var _animation_name := ""
 var _upper_animation_name := ""
 var _split_human_layers := false
+var _animation_elapsed := 0.0
 var _model_root: Node3D
 var _region_flash_meshes: Dictionary = {}
+var clothing_visual: CharacterClothingVisual
+var appearance: CharacterAppearance
 static var _scenes: Dictionary = {}
 static var _flash: StandardMaterial3D
 static var _animation_libraries: Dictionary = {}
@@ -44,10 +46,17 @@ const ZOMBIE_ANIMATIONS := {
 	"death": "res://assets/characters/mixamo/Zombie/zombie death.fbx",
 }
 const LOOPING_ANIMATIONS := ["idle", "walk", "run", "back_walk", "back_run", "strafe_left", "strafe_right", "armed_idle", "armed_run"]
+const UNIVERSAL_BONES := {
+	"Hips": "pelvis", "Spine": "spine_01", "Spine1": "spine_02", "Spine2": "spine_03", "Neck": "neck_01", "Head": "Head",
+	"LeftShoulder": "clavicle_l", "LeftArm": "upperarm_l", "LeftForeArm": "lowerarm_l", "LeftHand": "hand_l",
+	"RightShoulder": "clavicle_r", "RightArm": "upperarm_r", "RightForeArm": "lowerarm_r", "RightHand": "hand_r",
+	"LeftUpLeg": "thigh_l", "LeftLeg": "calf_l", "LeftFoot": "foot_l", "LeftToeBase": "ball_l",
+	"RightUpLeg": "thigh_r", "RightLeg": "calf_r", "RightFoot": "foot_r", "RightToeBase": "ball_r",
+}
 
 func setup(profile: CharacterBodyProfile, split_human_layers: bool = false) -> void:
 	_profile = profile
-	_split_human_layers = split_human_layers and profile.model_path.contains("/Human/")
+	_split_human_layers = split_human_layers and not profile.model_path.contains("/Zombie/")
 	if not _scenes.has(profile.model_path):
 		_scenes[profile.model_path] = load(profile.model_path)
 	var model := (_scenes[profile.model_path] as PackedScene).instantiate() as Node3D
@@ -73,12 +82,12 @@ func _setup_animations() -> void:
 	var key := _profile.model_path
 	if not _animation_libraries.has(key):
 		var library := AnimationLibrary.new()
-		var source_paths: Dictionary = PLAYER_ANIMATIONS if key.contains("/Human/") else ZOMBIE_ANIMATIONS
+		var source_paths: Dictionary = ZOMBIE_ANIMATIONS if key.contains("/Zombie/") else PLAYER_ANIMATIONS
 		for animation_name: String in source_paths:
 			var clip := _load_clip(source_paths[animation_name])
 			if clip == null: continue
 			clip.loop_mode = Animation.LOOP_LINEAR if animation_name in LOOPING_ANIMATIONS else Animation.LOOP_NONE
-			library.add_animation(animation_name, _retarget_clip(clip))
+			library.add_animation(animation_name, clip)
 		_animation_libraries[key] = library
 	animation_player.add_animation_library("", _animation_libraries[key])
 	add_child(animation_player)
@@ -108,11 +117,12 @@ func _load_clip(path: String) -> Animation:
 		source_player = node as AnimationPlayer
 		break
 	var clip: Animation = source_player.get_animation("mixamo_com") if source_player != null else null
+	var retargeted := _retarget_clip(clip, find_skeleton(source)) if clip != null else null
 	source.free()
-	return clip.duplicate(true) if clip != null else null
+	return retargeted
 
 
-func _retarget_clip(source: Animation) -> Animation:
+func _retarget_clip(source: Animation, source_skeleton: Skeleton3D) -> Animation:
 	var result := source.duplicate(true) as Animation
 	var skeleton_path := get_path_to(skeleton)
 	for track in result.get_track_count():
@@ -129,6 +139,23 @@ func _retarget_clip(source: Animation) -> Animation:
 			result.track_set_enabled(track, false)
 			continue
 		result.track_set_path(track, NodePath("%s:%s" % [skeleton_path, skeleton.get_bone_name(target_index)]))
+		if _profile.model_path.contains("Universal Base"):
+			# Convert rotations between the source/target global rest frames. Merely
+			# renaming tracks twists the UE-style skeleton's arms and pelvis.
+			if result.track_get_type(track) != Animation.TYPE_ROTATION_3D:
+				result.track_set_enabled(track, false)
+				continue
+			var source_index := bone(source_skeleton, suffix)
+			if source_index < 0: continue
+			var source_parent := source_skeleton.get_bone_parent(source_index)
+			var target_parent := skeleton.get_bone_parent(target_index)
+			var source_parent_basis := source_skeleton.get_bone_global_rest(source_parent).basis if source_parent >= 0 else Basis.IDENTITY
+			var target_parent_basis := skeleton.get_bone_global_rest(target_parent).basis if target_parent >= 0 else Basis.IDENTITY
+			var before := (target_parent_basis.inverse() * source_parent_basis).get_rotation_quaternion()
+			var after := (source_skeleton.get_bone_global_rest(source_index).basis.inverse() * skeleton.get_bone_global_rest(target_index).basis).get_rotation_quaternion()
+			for key in result.track_get_key_count(track):
+				var rotation: Quaternion = result.track_get_key_value(track, key)
+				result.track_set_key_value(track, key, (before * rotation * after).normalized())
 		# Movement uses authoritative map coordinates. Ignore downloaded root motion.
 		if suffix == "Hips" and result.track_get_type(track) == Animation.TYPE_POSITION_3D:
 			result.track_set_enabled(track, false)
@@ -144,7 +171,7 @@ func _layer_library(source: AnimationLibrary, upper: bool) -> AnimationLibrary:
 			var colon := path.find(":")
 			if colon < 0: continue
 			var bone_name := path.substr(colon + 1)
-			var lower := bone_name.contains("Hips") or bone_name.contains("UpLeg") or bone_name.contains("Leg") or bone_name.contains("Foot") or bone_name.contains("ToeBase")
+			var lower := bone_name.contains("Hips") or bone_name.contains("UpLeg") or bone_name.contains("Leg") or bone_name.contains("Foot") or bone_name.contains("ToeBase") or bone_name == "pelvis" or bone_name.begins_with("thigh_") or bone_name.begins_with("calf_") or bone_name.begins_with("foot_") or bone_name.begins_with("ball_")
 			if lower == upper: clip.track_set_enabled(track, false)
 		result.add_animation(name, clip)
 	return result
@@ -161,6 +188,32 @@ func advance_animation(delta: float, next: String, speed: float = 1.0) -> void:
 	if upper_animation_player != null and upper_animation_player.is_playing(): upper_animation_player.stop()
 	play_animation(next, 0.12, speed)
 	if animation_player != null: animation_player.advance(delta)
+
+
+func advance_animation_throttled(delta: float, next: String, speed: float = 1.0,
+		interval: float = 0.0) -> void:
+	## Rendering-only pose throttling. The actor's simulation, transform and
+	## combat state are still updated every frame by World3DView.
+	if interval <= 0.0:
+		_animation_elapsed = 0.0
+		advance_animation(delta, next, speed)
+		return
+	if lower_animation_player != null and lower_animation_player.is_playing(): lower_animation_player.stop()
+	if upper_animation_player != null and upper_animation_player.is_playing(): upper_animation_player.stop()
+	play_animation(next, 0.12, speed)
+	_animation_elapsed += delta
+	if _animation_elapsed < interval:
+		return
+	if animation_player != null: animation_player.advance(_animation_elapsed)
+	_animation_elapsed = 0.0
+
+
+static func animation_interval_for_distance(distance: float) -> float:
+	# Nearby actors retain 60 Hz pose updates. Far visible actors receive 30 or
+	# 15 Hz pose updates while their simulation remains at the normal tick rate.
+	if distance >= 14.0: return 1.0 / 15.0
+	if distance >= 8.0: return 1.0 / 30.0
+	return 0.0
 
 
 func advance_split_animation(delta: float, lower: String, lower_speed: float, upper: String, upper_restart: bool = false, upper_speed: float = 1.0) -> void:
@@ -229,9 +282,31 @@ static func find_skeleton(node: Node) -> Skeleton3D:
 	return null
 
 static func bone(skel: Skeleton3D, suffix: String) -> int:
+	if skel == null: return -1
+	var direct := skel.find_bone(suffix)
+	if direct >= 0: return direct
+	var universal_name: String = UNIVERSAL_BONES.get(suffix, "")
+	if universal_name.is_empty():
+		for side: String in ["Left", "Right"]:
+			for finger: String in ["Thumb", "Index", "Middle", "Ring", "Pinky"]:
+				var prefix := side + "Hand" + finger
+				if suffix.begins_with(prefix):
+					universal_name = "%s_0%s_%s" % [finger.to_lower(), suffix.trim_prefix(prefix), "l" if side == "Left" else "r"]
+	if not universal_name.is_empty():
+		direct = skel.find_bone(universal_name)
+		if direct >= 0: return direct
 	for index in skel.get_bone_count():
 		if skel.get_bone_name(index).ends_with("_" + suffix) or skel.get_bone_name(index).ends_with(":" + suffix):
 			return index
 	return -1
+
+func bind_clothing(inventory: InventoryGrid, actor_appearance: CharacterAppearance, zombie: bool = false) -> void:
+	appearance = actor_appearance
+	clothing_visual = CharacterClothingVisual.new()
+	add_child(clothing_visual)
+	clothing_visual.setup(self, inventory, "zombie" if zombie else actor_appearance.gender)
+	if not zombie and actor_appearance.hair != "original":
+		clothing_visual.add_hair(actor_appearance.hair)
+	clothing_visual.refresh()
 
 

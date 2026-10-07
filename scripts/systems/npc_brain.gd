@@ -30,7 +30,7 @@ func choose_goal(
 		return Goal.DRINK
 	if survival.hunger < 65.0:
 		return Goal.SCAVENGE
-	if survival.fatigue < 65.0:
+	if survival.fatigue > 65.0:
 		return Goal.REST
 	return Goal.REST
 

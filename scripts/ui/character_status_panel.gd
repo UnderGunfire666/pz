@@ -51,7 +51,7 @@ func _ready() -> void:
 	health_page.add_child(body_tree)
 	treatment_row = HBoxContainer.new()
 	health_page.add_child(treatment_row)
-	for action in ["bandage", "disinfectant", "antibiotic", "splint", "burn_dressing", "painkiller"]:
+	for action in ["bandage", "disinfectant", "antibiotic", "splint", "burn_dressing", "painkiller", "antidepressant", "beta_blocker", "caffeine", "sleeping_pill", "remove_glass", "remove_bullet", "suture"]:
 		var button := Button.new()
 		button.text = action.capitalize().replace("_", " ")
 		button.focus_mode = Control.FOCUS_NONE
@@ -82,15 +82,15 @@ func refresh(game: MVPGameRoot) -> void:
 	var character_data := state.character.to_save_data() if state.character != null else {}
 	var signature := str(game.inventory.revision) + str(state.health) + str(state.body_health) + str(state.wounds) + str(character_data) + str([
 		state.survival.hunger, state.survival.thirst, state.survival.fatigue, state.survival.stamina,
-		state.pain, state.core_temperature, state.panic, state.stress, state.boredom, state.unhappiness])
+		state.pain, state.core_temperature, state.panic, state.stress, state.boredom, state.unhappiness, state.anxiety, state.nausea, state.dizziness, state.effects])
 	if signature == _last_signature: return
 	_last_signature = signature
 	var symptoms := " · Symptoms: %s" % state.symptom_text() if not state.symptom_text().is_empty() else ""
 	summary_label.text = ("Health %.0f%% · Hunger %.0f · Thirst %.0f · Fatigue %.0f · Stamina %.0f\n" +
-		"Pain %.0f · Temperature %.2f°C (%s) · Panic %.0f · Stress %.0f · Boredom %.0f · Unhappiness %.0f%s") % [
+		"Pain %.0f · Temperature %.2f°C (%s) · Panic %.0f · Stress %.0f · Boredom %.0f · Unhappiness %.0f · Anxiety %.0f · Nausea %.0f · Dizziness %.0f%s") % [
 		state.health, state.survival.hunger, state.survival.thirst, state.survival.fatigue, state.survival.stamina,
 		state.pain, state.core_temperature, temperature_label(state), state.panic, state.stress,
-		state.boredom, state.unhappiness, symptoms]
+		state.boredom, state.unhappiness, state.anxiety, state.nausea, state.dizziness, symptoms]
 	body_tree.clear()
 	var root := body_tree.create_item()
 	var warmth := state.clothing.warmth_by_region()
@@ -177,10 +177,15 @@ func treatment_status(wound: Dictionary) -> String:
 	if float(wound["infection"]) > 0.0 and not wound["cleaned"]: labels.append("needs cleaning")
 	if wound["type"] == "Fracture" and not wound["splinted"]: labels.append("needs splint")
 	if wound["type"] == "Burn" and not wound["burn_dressed"]: labels.append("needs burn dressing")
+	if wound.get("foreign_body", "none") != "none": labels.append("foreign body: %s" % wound["foreign_body"])
+	if wound.get("requires_sutures", false): labels.append("needs sutures")
 	if wound["bandaged"]: labels.append("bandaged")
 	if wound["cleaned"]: labels.append("cleaned")
 	if wound["splinted"]: labels.append("splinted")
 	if wound["burn_dressed"]: labels.append("dressed")
+	if wound.get("bandage_dirty", false): labels.append("dirty bandage")
+	elif float(wound.get("bandage_absorption", 0.0)) > 0.0: labels.append("bloodied bandage")
+	elif wound.get("bandage_disinfected", false): labels.append("disinfected bandage")
 	if wound["healing"]: labels.append("healing")
 	return ", ".join(labels) if not labels.is_empty() else "untreated"
 

@@ -49,13 +49,16 @@ func setup(p_world_map: WorldMap, p_player: PlayerController, p_state: PlayerSta
 
 
 func _build_demo_interactions() -> void:
-	var beans := ItemDefinition.new("canned_beans", "Canned beans", Vector3(1, 1, 1), 0.45, ["food"])
-	beans.hunger_restore = 24.0
-	var water := ItemDefinition.new("bottled_water", "Bottled water", Vector3(1, 1, 2), 0.25, ["water"])
-	water.capacity_dimensions = Vector3(1, 1, 1)
-	water.thirst_restore = 32.0
+	var foods := ItemCatalog.food_definitions()
+	var liquids := ItemCatalog.liquid_definitions()
+	var medical := ItemCatalog.medical_definitions()
+	var packs := ItemCatalog.backpack_definitions()
+	var tools := ItemCatalog.tool_definitions()
+	var beans: ItemDefinition = foods["canned_beans"]
+	var water: ItemDefinition = liquids["bottled_water"]
 	points = [
 		{"id": "bed", "kind": "bed", "label": "Safehouse bed", "position": Vector2(5.5, 3.5), "floor": 0, "radius": 0.8},
+		{"id": "kitchen_tap", "kind": "water_source", "label": "Kitchen tap", "position": Vector2(5.5, 4.5), "floor": 0, "radius": 0.8},
 		_container_point("grocery_shelf", "Grocery shelf", Vector2(12.7, 6.5), 0, beans, water),
 		{"id": "glass", "kind": "hazard", "label": "Broken glass", "position": Vector2(8.5, 7.5), "floor": 0, "radius": 0.42, "triggered": false},
 		{"id": "upstairs_bed", "kind": "bed", "label": "Upstairs safehouse bed", "position": Vector2(5.5, 3.5), "floor": 1, "radius": 0.8},
@@ -63,25 +66,28 @@ func _build_demo_interactions() -> void:
 		_container_point("grocery_top", "Top-floor emergency kit", Vector2(14.5, 6.5), 2, beans, water),
 		_container_point("neighbour_pantry", "Neighbour's pantry", Vector2(3.5, 10.5), 0, beans, water),
 	]
-	(points.back()["container"] as ContainerData).claimed_by = "neighbour"
-	var bandage := ItemDefinition.new("test_bandage", "Test bandage", Vector3(1, 1, 0.25), 0.1, ["medical"])
-	bandage.medical_action = "bandage"
-	var disinfectant := ItemDefinition.new("test_disinfectant", "Disinfectant", Vector3(1, 1, 1), 0.15, ["medical"])
-	disinfectant.medical_action = "disinfectant"
-	var antibiotics := ItemDefinition.new("test_antibiotics", "Antibiotics", Vector3(1, 1, 0.5), 0.05, ["medical"])
-	antibiotics.medical_action = "antibiotic"
-	var painkillers := ItemDefinition.new("test_painkillers", "Painkillers", Vector3(1, 1, 0.5), 0.05, ["medical"])
-	painkillers.medical_action = "painkiller"
-	var splint := ItemDefinition.new("test_splint", "Splint", Vector3(4, 3, 45), 0.4, ["medical"])
-	splint.medical_action = "splint"
-	var burn_dressing := ItemDefinition.new("test_burn_dressing", "Burn dressing", Vector3(2, 2, 1), 0.1, ["medical"])
-	burn_dressing.medical_action = "burn_dressing"
+	var shelf: ContainerData = points[2]["container"]
+	for id in ["egg", "milk", "chicken", "beef", "cod", "apple", "berries", "carrot", "potato", "cabbage", "tomato", "canned_corn", "canned_tuna", "canned_sardines", "canned_tomato", "canned_vegetable_soup", "canned_fruit_cocktail", "chips", "biscuits", "granola_bar", "chocolate", "ice_cream", "ice_pop"]:
+		shelf.contents.append(ItemStack.new(foods[id]))
+	for id in ["canned_water", "juice"]:
+		shelf.contents.append(ItemStack.new(liquids[id]))
+	(points[7]["container"] as ContainerData).claimed_by = "neighbour"
+	points.append(_temperature_container("refrigerator", "Refrigerator", Vector2(4.5, 3.5), 0, 4.0))
+	points.append(_temperature_container("freezer", "Freezer", Vector2(3.5, 3.5), 0, -18.0))
+	var bandage: ItemDefinition = medical["bandage"]
+	var disinfectant: ItemDefinition = medical["disinfectant"]
+	var antibiotics: ItemDefinition = medical["antibiotics"]
+	var painkillers: ItemDefinition = medical["painkillers"]
+	var splint: ItemDefinition = medical["splint"]
+	var burn_dressing: ItemDefinition = medical["burn_dressing"]
 	var tool_case := ItemDefinition.new("test_tool_case", "Test tool case", Vector3(2, 2, 1), 2.0, ["tool"])
-	var ration := ItemDefinition.new("test_ration", "Test ration", Vector3(2, 1, 1), 0.5, ["food"])
-	ration.hunger_restore = 24.0
-	var small_pack := ItemStack.new(ItemDefinition.backpack("small_pack", "Small backpack", Vector3(2, 2, 2), 0.5, 0.2))
-	var large_pack := ItemStack.new(ItemDefinition.backpack("large_pack", "Hiking backpack", Vector3(4, 4, 4), 1.2, 0.35))
-	var broken_pack := ItemStack.new(ItemDefinition.backpack("broken_pack", "Torn backpack", Vector3(3, 3, 3), 0.8, 0.1))
+	var ration: ItemDefinition = foods["emergency_ration"]
+	var small_pack := ItemStack.new(packs["small_backpack"])
+	var large_pack := ItemStack.new(packs["hiking_backpack"])
+	var broken_pack := ItemStack.new(packs["duffel_bag"])
+	small_pack.units[0]["appearance"] = "medical"
+	large_pack.units[0]["appearance"] = "travel"
+	broken_pack.units[0]["appearance"] = "tool"
 	broken_pack.units[0]["durability"] = 0.0
 	points.insert(points.size() - 1, {"id": "backpack_crate", "kind": "container", "label": "Backpack crate",
 		"position": Vector2(5.7, 7.0), "floor": 0, "radius": 0.9,
@@ -89,14 +95,15 @@ func _build_demo_interactions() -> void:
 	points.insert(points.size() - 1, {"id": "test_supply_cache", "kind": "container", "label": "Test supply cache",
 		"position": Vector2(4.5, 7.0), "floor": 0, "radius": 0.9,
 		"container": ContainerData.new("test_supply_cache", "Test supply cache", [
-			ItemStack.new(bandage, 3), ItemStack.new(disinfectant), ItemStack.new(antibiotics),
-			ItemStack.new(painkillers), ItemStack.new(splint), ItemStack.new(burn_dressing),
+			ItemStack.new(bandage, 3), ItemStack.new(medical["adhesive_bandage"]), ItemStack.new(disinfectant), ItemStack.new(medical["alcohol_wipes"]), ItemStack.new(antibiotics), ItemStack.new(painkillers),
+			ItemStack.new(splint), ItemStack.new(burn_dressing), ItemStack.new(medical["antidepressants"]), ItemStack.new(medical["beta_blockers"]),
+			ItemStack.new(medical["caffeine_pills"]), ItemStack.new(medical["sleeping_pills"]), ItemStack.new(medical["tweezers"]),
+			ItemStack.new(medical["forceps"]), ItemStack.new(medical["suture_needle"]), ItemStack.new(medical["suture_needle_holder"]), ItemStack.new(medical["vitamins"]), ItemStack.new(tools["can_opener"]), ItemStack.new(tools["knife"]),
 			ItemStack.new(tool_case), ItemStack.new(ration, 2)])})
 	var locations := [Vector2(2.4, 2.7), Vector2(2.4, 3.5), Vector2(6.6, 2.7), Vector2(5.6, 11.2)]
 	var labels := ["Kitchen cabinet", "Living room cabinet", "Bedroom dresser", "Neighbour cupboard"]
 	var cabinet_floors := [0, 0, 1, 0]
-	var snack := ItemDefinition.new("cabinet_snack", "Trail snack", Vector3(4, 4, 8), 0.1, ["food"])
-	snack.hunger_restore = 24.0
+	var snack: ItemDefinition = foods["granola_bar"]
 	var hammer := ItemDefinition.new("cabinet_hammer", "Hammer", Vector3(4, 4, 30), 0.8, ["weapon", "tool"])
 	hammer.weapon_attack_type = "swing"
 	hammer.weapon_damage = 2
@@ -111,6 +118,7 @@ func _build_demo_interactions() -> void:
 		points.insert(points.size() - 1, {"id": id, "kind": "container", "label": labels[index], "position": locations[index],
 			"floor": cabinet_floors[index], "radius": CONTAINER_REACH, "container": cabinet, "furniture": true})
 	var clothing_loot: Array[ItemStack] = []
+	clothing_loot.append_array(ClothingCatalog.all_items())
 	clothing_loot.append(ItemStack.new(ItemDefinition.clothing("shirt", "Cotton shirt", "inner_top",
 		["Torso", "Left Arm", "Right Arm"], {"Torso": 15, "Left Arm": 10, "Right Arm": 10},
 		{"Torso": 30, "Left Arm": 20, "Right Arm": 20}, {"Torso": 30, "Left Arm": 25, "Right Arm": 25}, 0.35, Vector3(25, 20, 3), 1)))
@@ -148,16 +156,17 @@ func _build_demo_interactions() -> void:
 func _container_point(id: String, label: String, pos: Vector2, floor: int,
 		food: ItemDefinition, water: ItemDefinition) -> Dictionary:
 	var bottles := ItemStack.new(water, 2)
-	var liquid := ItemDefinition.new("water", "Water", Vector3(0.5, 1, 1), 0.5, ["liquid", "water"])
-	liquid.thirst_restore = 32.0
-	for unit in bottles.units:
-		unit["contents"].append(ItemStack.new(liquid))
 	var cans := ItemStack.new(food, 2)
 	cans.units[0]["flavor"] = "Tomato"
 	cans.units[1]["flavor"] = "Chili"
 	return {"id": id, "kind": "container", "label": label, "position": pos,
 		"floor": floor, "radius": 0.9,
 		"container": ContainerData.new(id, label, [cans, bottles])}
+
+func _temperature_container(id: String, label: String, pos: Vector2, floor: int, temperature: float) -> Dictionary:
+	var container := ContainerData.new(id, label)
+	container.temperature_target = temperature
+	return {"id": id, "kind": "container", "label": label, "position": pos, "floor": floor, "radius": 0.9, "container": container}
 
 
 func _process(delta: float) -> void:
@@ -207,8 +216,11 @@ func request_interaction() -> void:
 				container_view_requested.emit(point["id"])
 		"bed":
 			if not _pack_ready(): return
-			if player_state.survival.fatigue >= StatusConfig.SLEEP_FATIGUE_THRESHOLD:
+			if player_state.survival.fatigue < StatusConfig.SLEEP_FATIGUE_THRESHOLD and not player_state.effect_active("sleeping_pill"):
 				notification_requested.emit("You are not tired enough to sleep.")
+				return
+			if (player_state.pain >= 60.0 or player_state.anxiety >= 60.0) and not player_state.effect_active("sleeping_pill"):
+				notification_requested.emit("Pain or anxiety prevents sleep.")
 				return
 			if _danger_nearby():
 				notification_requested.emit("It is too dangerous to sleep.")
@@ -216,6 +228,12 @@ func request_interaction() -> void:
 			pre_sleep_speed = GameTime.speed_mode
 			_start_action("sleep", "Sleeping", MAX_SLEEP_GAME_SECONDS, point)
 			GameTime.set_speed(GameTime.SpeedMode.SLEEP)
+		"water_source":
+			var held_empty := _held_refillable_container()
+			if held_empty.is_empty():
+				notification_requested.emit("Hold an empty can or bottle to fill it.")
+				return
+			request_refill_water_container(String(held_empty["unit"]["uid"]))
 
 
 func request_sorting() -> void:
@@ -273,6 +291,7 @@ func prompt(target: Variant = null) -> String:
 			var remaining := maxf(0, container.search_duration_game_seconds - container.search_progress_seconds)
 			return "[E] Search %s (%.1f s at 1x)" % [point["label"], remaining / GameTime.GAME_SECONDS_PER_REAL_SECOND / player_state.action_efficiency("search")]
 		return "[E] %s %s" % ["View" if String(point["id"]).begins_with("dropped_") else ("Close" if (point["container"] as ContainerData).is_open else "Open"), point["label"]]
+	if point["kind"] == "water_source": return "[E] Fill held can or bottle · %s" % point["label"]
 	return "[E] Sleep · %s" % point["label"]
 
 
@@ -344,7 +363,7 @@ func _update_active_action(delta: float) -> void:
 	var efficiency := player_state.action_efficiency(kind) if kind == "search" or (kind == "pack" and active_action["payload"].get("step") in ["repair", "treat"]) else 1.0
 	var budget := delta * GameTime.GAME_SECONDS_PER_REAL_SECOND * GameTime.simulation_scale() * efficiency
 	while not active_action.is_empty():
-		if is_resting() and player_state.survival.fatigue >= 100.0:
+		if is_resting() and player_state.survival.fatigue <= 0.0:
 			var sleep_completed := active_action
 			active_action = {}
 			player.interaction_locked = false
@@ -652,11 +671,16 @@ func treatment_reason(item_uid: String, wound_id: String) -> String:
 	if found.is_empty() or not inventory.carried(item_uid): return "medical item must be carried"
 	var treatment: String = found["stack"].definition.medical_action
 	if treatment.is_empty(): return "item has no medical use"
-	if treatment != "painkiller":
+	if treatment not in ["painkiller", "antidepressant", "beta_blocker", "caffeine", "sleeping_pill"]:
 		var wound := player_state.wound_by_id(wound_id)
 		if wound.is_empty(): return "select an injury"
 		if treatment == "splint" and wound["type"] != "Fracture": return "splints treat fractures"
 		if treatment == "burn_dressing" and wound["type"] != "Burn": return "dressing treats burns"
+		if treatment == "remove_glass" and wound.get("foreign_body", "none") != "glass": return "tweezers remove glass fragments"
+		if treatment == "remove_bullet":
+			if wound.get("foreign_body", "none") != "bullet": return "forceps remove bullets"
+			if inventory.first_medical_action("remove_glass").is_empty(): return "bullet removal also requires tweezers"
+		if treatment == "suture" and (not wound.get("requires_sutures", false) or wound.get("foreign_body", "none") != "none"): return "remove the foreign body before suturing"
 	return ""
 
 func request_treatment(item_uid: String, wound_id: String = "") -> void:
@@ -670,12 +694,81 @@ func request_treatment(item_uid: String, wound_id: String = "") -> void:
 		"wound_id": wound_id, "treatment": found["stack"].definition.medical_action}]
 	_begin_pack_queue()
 
+func request_disinfect_bandage(uid: String) -> void:
+	var found := inventory.find_unit(uid)
+	if found.is_empty() or "bandage" not in found["stack"].definition.tags:
+		notification_requested.emit("Select a clean bandage.")
+		return
+	if float(found["unit"].get("bandage_absorption", 0.0)) > 0.0:
+		notification_requested.emit("Wash bloodied bandages before disinfecting them.")
+		return
+	var disinfectant_uid := inventory.first_medical_action("disinfectant")
+	if disinfectant_uid.is_empty():
+		notification_requested.emit("Disinfectant is required.")
+		return
+	inventory.remove_unit(disinfectant_uid)
+	found["unit"]["bandage_disinfected"] = true
+	inventory.revision += 1
+	notification_requested.emit("Bandage disinfected.")
+
+func request_wash_bandage(uid: String) -> void:
+	var found := inventory.find_unit(uid)
+	if found.is_empty() or "bandage" not in found["stack"].definition.tags:
+		notification_requested.emit("Select a bandage.")
+		return
+	var absorption := float(found["unit"].get("bandage_absorption", 0.0))
+	if absorption <= 0.0 or absorption >= 28.0:
+		notification_requested.emit("Only bloodied, non-dirty bandages can be washed.")
+		return
+	var water_uid := inventory.first_with_tag("water")
+	if water_uid.is_empty():
+		notification_requested.emit("Water is required.")
+		return
+	if not _pack_ready(): return
+	pack_queue = [{"step": "wash", "uid": uid, "destination": found["owner"], "water_uid": water_uid, "absorption": absorption}]
+	_begin_pack_queue()
+
+func refill_reason(uid: String) -> String:
+	var found := inventory.find_unit(uid)
+	if found.is_empty() or not inventory.carried(uid): return "empty container must be carried"
+	if not String(found["stack"].definition.id) in ["empty_can", "empty_bottle"]: return "only empty cans and bottles can be filled"
+	for point in points:
+		if point["kind"] == "water_source" and _reachable(point): return ""
+	return "reach a water source"
+
+func request_refill_water_container(uid: String) -> void:
+	var reason := refill_reason(uid)
+	if not reason.is_empty():
+		notification_requested.emit(reason)
+		return
+	if not _pack_ready(): return
+	var found := inventory.find_unit(uid)
+	pack_queue = [{"step": "fill", "uid": uid, "destination": found["owner"]}]
+	_begin_pack_queue()
+
+func _held_refillable_container() -> Dictionary:
+	for slot in InventoryGrid.HANDS:
+		for stack: ItemStack in inventory.contents(slot):
+			if stack.definition.id in ["empty_can", "empty_bottle"] and not stack.units.is_empty():
+				return {"stack": stack, "unit": stack.units[0], "owner": slot}
+	return {}
+
 
 func request_use(uid: String) -> void:
 	if uid.is_empty() and not inventory.use_context.is_empty(): uid = inventory.use_context["uid"]
 	var found := inventory.find_unit(uid)
 	if found.is_empty() or not can_access(uid): return
 	if not "food" in found["stack"].definition.tags and not "water" in found["stack"].definition.tags: return
+	var definition: ItemDefinition = found["stack"].definition
+	if definition.requires_opening and not bool(found["unit"].get("opened", false)):
+		if "canned" in definition.tags and not inventory.held_tag("can_opener") and not inventory.held_tag("knife"):
+			notification_requested.emit("Hold a can opener or knife to open this can.")
+			return
+		found["unit"]["opened"] = true
+		inventory.revision += 1
+		notification_requested.emit("Opened %s." % definition.display_name)
+		return
+	if not _usable_food(found): return
 	var origin: String = found["owner"]
 	var return_after := inventory.carried(uid) and not origin in InventoryGrid.HANDS
 	var resume: bool = inventory.use_context.get("uid", "") == uid
@@ -726,6 +819,10 @@ func _start_next_pack_step() -> void:
 		pack_queue.clear()
 		notification_requested.emit(treatment_reason(step["uid"], step.get("wound_id", "")))
 		return
+	if step["step"] == "fill" and not refill_reason(step["uid"]).is_empty():
+		pack_queue.clear()
+		notification_requested.emit(refill_reason(step["uid"]))
+		return
 	_start_action("pack", "%s: %s %d/%d" % [String(step["step"]).capitalize(), title,
 		int(step.get("index", 1)), int(step.get("total", pack_queue.size() + 1))],
 		pack_step_duration(step), step)
@@ -735,17 +832,23 @@ func pack_step_duration(step: Dictionary) -> float:
 	if step["step"] in ["wear", "unwear"]: return CLOTHING_CHANGE_GAME_SECONDS
 	if step["step"] == "repair": return CLOTHING_REPAIR_GAME_SECONDS
 	if step["step"] == "treat": return MEDICAL_ACTION_GAME_SECONDS
+	if step["step"] == "wash": return maxf(1.0, float(step.get("absorption", 0.0)) * 30.0)
+	if step["step"] == "fill":
+		var refill_found := inventory.find_unit(step["uid"])
+		if refill_found.is_empty(): return 0.000001
+		return float(refill_found["stack"].definition.liquid_capacity_ml) * 60.0 / 100.0
 	if step["step"] == "return" and not inventory.use_context.get("return_after", true): return 0.000001
 	if step["step"] == "use":
 		var target := _consumable(step["uid"])
 		if target.is_empty(): return 0.000001
 		var item: ItemDefinition = target["stack"].definition
 		var water := "water" in item.tags
-		var amount := item.volume() if water else item.unit_weight * 1000.0
+		var amount := float(target["unit"].get("liquid_ml", item.liquid_capacity_ml)) if water and item.liquid_capacity_ml > 0.0 else (item.volume() if water else item.unit_weight * 1000.0)
 		var reserve := player_state.survival.thirst if water else player_state.survival.hunger
 		var benefit := _restore_amount(item, water)
 		var fraction := minf(float(target["unit"].get("remaining", 1.0)), maxf(0.0, 100.0 - reserve) / maxf(0.000001, benefit))
-		return maxf(0.000001, amount * fraction / (50.0 if water else 10.0))
+		var rate := 100.0 if water else (item.consumption_rate_per_game_minute if item.consumption_rate_per_game_minute > 0.0 else 60.0)
+		return maxf(0.000001, amount * fraction / rate * 60.0)
 	var found := inventory.find_unit(step["uid"])
 	if found.is_empty(): return 0.000001
 	var single := ItemStack.from_unit(found["stack"].definition, found["unit"])
@@ -759,11 +862,25 @@ func pack_step_duration(step: Dictionary) -> float:
 func _consumable(uid: String) -> Dictionary:
 	var found := inventory.find_unit(uid)
 	if found.is_empty(): return {}
-	if found["stack"].definition.capacity() <= 0: return found
+	if found["stack"].definition.capacity() <= 0 or ("water" in found["stack"].definition.tags and found["stack"].definition.liquid_capacity_ml > 0.0): return found
 	for child: ItemStack in found["unit"]["contents"]:
 		if "water" in child.definition.tags or "food" in child.definition.tags:
 			return inventory.find_unit(child.units[0]["uid"])
 	return {}
+
+func _usable_food(found: Dictionary) -> bool:
+	var item: ItemDefinition = found["stack"].definition
+	var unit: Dictionary = found["unit"]
+	if item.requires_opening and not bool(unit.get("opened", false)):
+		notification_requested.emit("Open this item first.")
+		return false
+	if item.freshness_lifetime_days > 0.0 and float(unit.get("freshness", 100.0)) <= 0.0:
+		notification_requested.emit("Spoiled items cannot be consumed.")
+		return false
+	if ("food" in item.tags or "water" in item.tags) and float(unit.get("temperature", 20.0)) <= 0.0 and not item.edible_frozen:
+		notification_requested.emit("This item must thaw above 0°C first.")
+		return false
+	return true
 
 
 func _advance_consumption(uid: String, seconds: float) -> void:
@@ -773,20 +890,27 @@ func _advance_consumption(uid: String, seconds: float) -> void:
 		return
 	var item: ItemDefinition = found["stack"].definition
 	var water := "water" in item.tags
-	var original_amount := item.volume() if water else item.unit_weight * 1000.0
+	var original_amount := float(found["unit"].get("liquid_ml", item.liquid_capacity_ml)) if water and item.liquid_capacity_ml > 0.0 else (item.volume() if water else item.unit_weight * 1000.0)
 	var reserve := player_state.survival.thirst if water else player_state.survival.hunger
 	var benefit := _restore_amount(item, water)
 	var remaining := float(found["unit"].get("remaining", 1.0))
-	var fraction := minf(remaining, minf(seconds * (50.0 if water else 10.0) / maxf(0.000001, original_amount), maxf(0.0, 100.0 - reserve) / benefit))
+	var rate := 100.0 if water else (item.consumption_rate_per_game_minute if item.consumption_rate_per_game_minute > 0.0 else 60.0)
+	var fraction := minf(remaining, minf(seconds * rate / 60.0 / maxf(0.000001, original_amount), maxf(0.0, 100.0 - reserve) / benefit))
 	if water: player_state.survival.drink(fraction * benefit)
 	else:
 		player_state.survival.eat(fraction * benefit)
-		player_state.unhappiness = clampf(player_state.unhappiness - fraction * item.happiness_effect, 0.0, 100.0)
+		var happiness_multiplier := 0.5 if float(found["unit"].get("freshness", 100.0)) < 50.0 else 1.0
+		player_state.unhappiness = clampf(player_state.unhappiness - fraction * item.happiness_effect * happiness_multiplier, 0.0, 100.0)
 	found["unit"]["remaining"] = remaining - fraction
+	if water and item.liquid_capacity_ml > 0.0: found["unit"]["liquid_ml"] = maxf(0.0, original_amount * (remaining - fraction))
 	if remaining - fraction <= 0.000001:
 		var stack: ItemStack = found["stack"]
+		var owner: String = found["owner"]
 		stack.units.erase(found["unit"])
 		if stack.quantity == 0: inventory.contents(found["owner"]).erase(stack)
+		if water and not item.empty_container_id.is_empty() and item.empty_container_id != "empty_juice_box":
+			var empty: Variant = ItemCatalog.liquid_definitions().get(item.empty_container_id, null)
+			if empty is ItemDefinition: inventory.contents(owner).append(ItemStack.new(empty))
 		if inventory.find_unit(uid).is_empty(): inventory.use_context = {}
 		active_action["remaining"] = 0.0
 	if reserve + fraction * benefit >= 100.0: active_action["remaining"] = 0.0
@@ -832,10 +956,49 @@ func _commit_pack_step(step: Dictionary) -> bool:
 			float(found["unit"]["clothing_durability"][region]) + float(item.clothing_max_durability[region]) * 0.1)
 		inventory.revision += 1
 		return true
+	if kind == "wash":
+		var absorption := float(found["unit"].get("bandage_absorption", 0.0))
+		if absorption <= 0.0 or absorption >= 28.0: return false
+		var water := inventory.find_unit(String(step.get("water_uid", "")))
+		if water.is_empty():
+			inventory.last_error = "Water is no longer available."
+			return false
+		var water_needed := 100.0 * absorption / 28.0
+		if water["stack"].definition.liquid_capacity_ml > 0.0:
+			if float(water["unit"].get("liquid_ml", 0.0)) < water_needed: return false
+			water["unit"]["liquid_ml"] = float(water["unit"].get("liquid_ml", 0.0)) - water_needed
+			water["unit"]["remaining"] = water["unit"]["liquid_ml"] / water["stack"].definition.liquid_capacity_ml
+		found["unit"]["bandage_absorption"] = 0.0
+		found["unit"]["bandage_disinfected"] = false
+		inventory.revision += 1
+		return true
+	if kind == "fill":
+		var replacement_id: String = {"empty_can": "canned_water", "empty_bottle": "bottled_water"}.get(found["stack"].definition.id, "")
+		var water: Variant = ItemCatalog.liquid_definitions().get(replacement_id, null)
+		if not water is ItemDefinition: return false
+		var owner: String = found["owner"]
+		var old_stack: ItemStack = found["stack"]
+		old_stack.units.erase(found["unit"])
+		if old_stack.quantity == 0: inventory.contents(owner).erase(old_stack)
+		inventory.contents(owner).append(ItemStack.new(water))
+		inventory.revision += 1
+		return true
 	if kind == "treat":
 		if not treatment_reason(uid, step.get("wound_id", "")).is_empty(): return false
-		if not player_state.treat_wound(step.get("wound_id", ""), step["treatment"]): return false
-		inventory.remove_unit(uid)
+		var wound := player_state.wound_by_id(step.get("wound_id", ""))
+		var treatment: String = step["treatment"]
+		if treatment == "bandage" and not wound.is_empty() and bool(wound.get("bandaged", false)):
+			var bandage_definitions := ItemCatalog.medical_definitions()
+			var old_definition: Variant = bandage_definitions.get(String(wound.get("bandage_item_id", "bandage")), bandage_definitions["bandage"])
+			var returned := ItemStack.new(old_definition as ItemDefinition)
+			returned.units[0]["bandage_absorption"] = float(wound.get("bandage_absorption", 0.0))
+			returned.units[0]["bandage_disinfected"] = bool(wound.get("bandage_disinfected", false))
+			inventory.contents(found["owner"]).append(returned)
+		if not player_state.treat_wound(step.get("wound_id", ""), treatment): return false
+		if treatment == "bandage" and not wound.is_empty():
+			wound["bandage_disinfected"] = bool(found["unit"].get("bandage_disinfected", false))
+			wound["bandage_item_id"] = found["stack"].definition.id
+		if not "tool" in found["stack"].definition.tags: inventory.remove_unit(uid)
 		return true
 	if inventory.use_context.get("uid", "") != uid or not found["owner"] in InventoryGrid.HANDS: return false
 	if kind == "return":

@@ -13,6 +13,27 @@ func _init(p_inventory: InventoryGrid = null) -> void:
 	inventory = p_inventory
 	rng.randomize()
 
+## Shared immediate commands for NPCs/zombies. Player interactions schedule
+## these same inventory transitions through the existing timed action queue.
+func wear(uid: String) -> bool:
+	if inventory == null: return false
+	var found := inventory.find_unit(uid)
+	if found.is_empty(): return false
+	var slot: String = found["stack"].definition.clothing_slot
+	if slot not in InventoryGrid.CLOTHING_SLOTS or found["owner"] == slot: return false
+	var moves: Array = []
+	if not inventory.contents(slot).is_empty():
+		moves.append({"uid": inventory.contents(slot)[0].units[0]["uid"], "destination": "loose"})
+	moves.append({"uid": uid, "destination": slot})
+	if not inventory.preview_moves(moves): return false
+	for move: Dictionary in moves:
+		if not inventory.move_unit(move["uid"], move["destination"]): return false
+	return true
+
+func remove(slot: String) -> bool:
+	if inventory == null or slot not in InventoryGrid.CLOTHING_SLOTS or inventory.contents(slot).is_empty(): return false
+	return inventory.move_unit(inventory.contents(slot)[0].units[0]["uid"], "loose")
+
 static func rag_definition() -> ItemDefinition:
 	return ItemDefinition.new("rag", "Rag", Vector3(15, 10, 1), 0.05, ["rag", "repair_material"])
 

@@ -13,7 +13,7 @@ var sleeve_color := Color("c99c7c")
 var _last_feet := Vector3.INF
 var _walk_phase := 0.0
 var _walk_blend := 0.0
-const BAT_MODEL: PackedScene = preload("res://assets/RandomObjects/bat/batclean_low.glb")
+const BAT_MODEL: PackedScene = preload("res://assets/Objects/bat/batclean_low.glb")
 
 
 func setup(source: InventoryGrid) -> void:

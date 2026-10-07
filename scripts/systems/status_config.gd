@@ -30,9 +30,18 @@ static var VIRUS_LATENT_MIN_SECONDS := 7.0 * 86400.0
 static var VIRUS_LATENT_MAX_SECONDS := 14.0 * 86400.0
 const VIRUS_SYMPTOM_FRACTION := 0.8
 
-const WOUND_TYPES := ["Scratch", "Laceration", "Bite", "Fracture", "Burn"]
-const BLEEDING_FACTOR := {"Scratch": 0.25, "Laceration": 0.7, "Bite": 0.55, "Fracture": 0.0, "Burn": 0.15}
-const PAIN_FACTOR := {"Scratch": 0.35, "Laceration": 0.65, "Bite": 0.7, "Fracture": 1.0, "Burn": 0.9}
+const WOUND_TYPES := ["Scratch", "Laceration", "Bite", "Fracture", "Burn", "Deep Wound"]
+const BLEEDING_FACTOR := {"Scratch": 0.25, "Laceration": 0.7, "Bite": 0.55, "Fracture": 0.0, "Burn": 0.15, "Deep Wound": 0.9}
+const PAIN_FACTOR := {"Scratch": 0.35, "Laceration": 0.65, "Bite": 0.7, "Fracture": 1.0, "Burn": 0.9, "Deep Wound": 1.0}
+
+const MONTHLY_AMBIENT_TEMPERATURES := [-7.5, -6.5, -2.1, 5.3, 11.7, 16.9, 19.4, 18.4, 14.3, 7.8, 2.0, -4.1]
+
+static func ambient_temperature_at(game_seconds: float) -> float:
+	var day := game_seconds / 86400.0
+	var year_fraction := fposmod(day, 365.0) / 365.0 * 12.0
+	var index := int(floor(year_fraction)) % 12
+	var next := (index + 1) % 12
+	return lerpf(MONTHLY_AMBIENT_TEMPERATURES[index], MONTHLY_AMBIENT_TEMPERATURES[next], year_fraction - floor(year_fraction))
 
 static func severity_tier(value: float, inverse: bool = false) -> int:
 	var severity := 100.0 - value if inverse else value

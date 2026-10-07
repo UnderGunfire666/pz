@@ -10,6 +10,8 @@ extends Resource
 @export_range(0.0, 1.0) var weight_reduction := 0.0
 @export var requires_two_hands := false
 @export var clothing_slot := ""
+@export var clothing_gender := ""
+@export var outfit_group := ""
 @export var clothing_regions: Array[String] = []
 @export var clothing_protection: Dictionary = {}
 @export var clothing_warmth: Dictionary = {}
@@ -23,6 +25,17 @@ extends Resource
 @export var thirst_restore := 0.0
 @export var happiness_effect := 0.0
 @export var medical_action := ""
+## Static item data. Mutable condition belongs on ItemStack units.
+@export var calories := 0.0
+@export var freshness_lifetime_days := 0.0
+@export var requires_opening := false
+@export var liquid_capacity_ml := 0.0
+@export var empty_container_id := ""
+@export var cooking_state_supported := false
+@export var default_cooking_state := "raw"
+@export var edible_frozen := false
+@export var consumption_rate_per_game_minute := 0.0
+@export var appearance_variants: Array[String] = []
 
 func _init(p_id: String = "", p_name: String = "", p_dimensions: Vector3 = Vector3.ONE,
 		p_weight: float = 0.0, p_tags: Array[String] = []) -> void:

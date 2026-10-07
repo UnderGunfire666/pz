@@ -16,6 +16,8 @@ var claimed_by: String = ""
 var search_progress_seconds := 0.0
 ## Simulation seconds; 72 equals 3 real seconds at normal game speed.
 var search_duration_game_seconds := 72.0
+## NaN means this container follows the normal monthly ambient temperature.
+var temperature_target := NAN
 
 
 func _init(p_id: String, p_display_name: String, p_contents: Array[ItemStack] = []) -> void:

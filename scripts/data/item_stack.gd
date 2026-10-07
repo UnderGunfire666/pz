@@ -12,7 +12,12 @@ var quantity: int:
 		while units.size() < value:
 			units.append({"uid": new_uid(), "flavor": "", "durability": 100.0, "contents": [],
 				"remaining": 1.0, "acquired": GameTime.elapsed_game_seconds,
-				"clothing_durability": definition.clothing_max_durability.duplicate(true), "switched_on": false})
+				"clothing_durability": definition.clothing_max_durability.duplicate(true), "switched_on": false,
+				"freshness": 100.0, "temperature": StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds),
+				"opened": not definition.requires_opening, "cooking_state": definition.default_cooking_state,
+				"liquid_ml": definition.liquid_capacity_ml,
+				"bandage_absorption": 0.0, "bandage_disinfected": false,
+				"appearance": definition.appearance_variants[0] if not definition.appearance_variants.is_empty() else "default"})
 
 static func new_uid() -> String:
 	return Crypto.new().generate_random_bytes(16).hex_encode()
@@ -58,4 +63,12 @@ func used_volume(index: int = 0) -> float:
 	return result
 
 func label() -> String:
-	return definition.display_name if quantity == 1 else "%s x%d" % [definition.display_name, quantity]
+	if quantity != 1: return "%s x%d" % [definition.display_name, quantity]
+	var unit := units[0]
+	if "bandage" in definition.tags:
+		if float(unit.get("bandage_absorption", 0.0)) >= 28.0: return "Dirty bandage"
+		if float(unit.get("bandage_absorption", 0.0)) > 0.0: return "Bloodied bandage"
+		if bool(unit.get("bandage_disinfected", false)): return "Disinfected bandage"
+	if definition.freshness_lifetime_days > 0.0 and float(unit.get("freshness", 100.0)) <= 0.0:
+		return ("Rotten " if "food" in definition.tags else "Spoiled ") + definition.display_name
+	return definition.display_name

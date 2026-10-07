@@ -4,9 +4,9 @@
 
 [resource]
 script = ExtResource("1_pkwj3")
-model_path = "res://assets/characters/mixamo/Human/Player.fbx"
-model_scale = 0.9973767057446661
-model_offset = Vector3(0, 0.000101976104, 0)
+model_path = "res://assets/Universal Base Characters[Standard]/Base Characters/Godot - UE/Superhero_Male_FullBody.gltf"
+model_scale = 0.989235
+model_offset = Vector3(0, 0.00940762, 0)
 regions = {
 "Head": AABB(-0.115, 1.4937086, -0.1266014, 0.23, 0.3062914, 0.26),
 "Left Arm": AABB(-0.3941598, 0.83697027, -0.003447894, 0.27207333, 0.6600373, 0.13000056),

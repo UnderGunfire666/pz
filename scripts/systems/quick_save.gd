@@ -3,8 +3,10 @@ extends RefCounted
 
 ## A single versioned local slot. Only primitive Variant data is decoded.
 ## Pack steps resume from saved progress; other actions stop with search progress retained.
-const VERSION := 12
-const PATH := "user://afterlight_mvp_v12.save"
+const VERSION := 14
+const PATH := "user://afterlight_mvp_v14.save"
+const LEGACY_PATH_V13 := "user://afterlight_mvp_v13.save"
+const LEGACY_PATH_V12 := "user://afterlight_mvp_v12.save"
 const LEGACY_PATH_V11 := "user://afterlight_mvp_v11.save"
 const LEGACY_PATH_V10 := "user://afterlight_mvp_v10.save"
 const LEGACY_PATH_V9 := "user://afterlight_mvp_v9.save"
@@ -45,7 +47,9 @@ static func save_game(game: MVPGameRoot, path: String = PATH) -> bool:
 
 static func load_game(game: MVPGameRoot, path: String = PATH) -> bool:
 	if path == PATH and not FileAccess.file_exists(path):
-		if FileAccess.file_exists(LEGACY_PATH_V11): path = LEGACY_PATH_V11
+		if FileAccess.file_exists(LEGACY_PATH_V13): path = LEGACY_PATH_V13
+		elif FileAccess.file_exists(LEGACY_PATH_V12): path = LEGACY_PATH_V12
+		elif FileAccess.file_exists(LEGACY_PATH_V11): path = LEGACY_PATH_V11
 		elif FileAccess.file_exists(LEGACY_PATH_V10): path = LEGACY_PATH_V10
 		elif FileAccess.file_exists(LEGACY_PATH_V9): path = LEGACY_PATH_V9
 		elif FileAccess.file_exists(LEGACY_PATH_V8): path = LEGACY_PATH_V8
@@ -141,6 +145,8 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	if data.get("version") == 9: data = _migrate_v9(data)
 	if data.get("version") == 10: data = _migrate_v10(data)
 	if data.get("version") == 11: data = _migrate_v11(data)
+	if data.get("version") == 12: data = _migrate_v12(data)
+	if data.get("version") == 13: data = _migrate_v13(data)
 	data = _migrate_cabinet_layout(data, game.world_map)
 	if not data.get("cabinet_layout") is int or data["cabinet_layout"] != 1: return false
 	if not _compatible_map_identity(data.get("map_identity"), map_identity(game.world_map.definition)):
@@ -154,6 +160,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 			return false
 	if data["version"] != VERSION or not _valid_actor(data["player"], game.world_map):
 		return false
+	if not _valid_appearance(data["player"], false) or not _valid_appearance(data["npc"], true): return false
 	if not _valid_barrier_states(data["barriers"], game.world_map): return false
 	if not _valid_actor(data["npc"], game.world_map) or not data["npc"].get("brain") is Dictionary or not data["npc"].get("known_containers") is Array:
 		return false
@@ -204,6 +211,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 		if not data["milestones"].get(key) is bool:
 			return false
 	for entry in data["zombies"]:
+		if not _valid_appearance(entry, true): return false
 		if not _valid_actor(entry, game.world_map) or not entry.has_all(["health", "target", "target_floor", "has_target", "cooldown", "perception"]):
 			return false
 		if not entry["target"] is Vector2 or not _number(entry["cooldown"]) or not entry["health"] is int or not entry["target_floor"] is int or not entry["has_target"] is bool:
@@ -227,6 +235,7 @@ static func validate(data: Dictionary, game: MVPGameRoot) -> bool:
 	pack.absolute_limit = game.inventory.absolute_limit
 	if not data["inventory"].get("strength") is int or data["inventory"]["strength"] < 0: return false
 	pack.strength = data["inventory"]["strength"]
+	pack.wearer_gender = data["player"]["appearance"]["gender"]
 	for root in InventoryGrid.ROOTS:
 		if not data["inventory"].get(root) is Array: return false
 		for entry in data["inventory"][root]:
@@ -290,6 +299,8 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	if data.get("version") == 9: data = _migrate_v9(data)
 	if data.get("version") == 10: data = _migrate_v10(data)
 	if data.get("version") == 11: data = _migrate_v11(data)
+	if data.get("version") == 12: data = _migrate_v12(data)
+	if data.get("version") == 13: data = _migrate_v13(data)
 	data = _migrate_cabinet_layout(data, game.world_map)
 	if not validate(data, game): return
 	game.interactions.interrupt_action("Loading")
@@ -309,6 +320,7 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.player_state.character.load_save_data(data["character"])
 	_restore_survival(game.player_state.survival, data["survival"])
 	game.inventory.strength = data["inventory"]["strength"]
+	game.inventory.wearer_gender = game.player.appearance.gender
 	for root in InventoryGrid.ROOTS:
 		game.inventory.contents(root).clear()
 		for entry in data["inventory"][root]:
@@ -389,13 +401,38 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 
 
 static func _actor_data(actor: Node) -> Dictionary:
-	return {"position": actor.get("logical_position"), "floor": actor.get("floor_level"), "stair": actor.get("stair_id")}
+	var data := {"position": actor.get("logical_position"), "floor": actor.get("floor_level"), "stair": actor.get("stair_id"),
+		"appearance": actor.appearance.to_save_data()}
+	if not actor is PlayerController:
+		data["wardrobe"] = {}
+		for slot: String in InventoryGrid.ROOTS: data["wardrobe"][slot] = _pack_items(actor.inventory.contents(slot))
+	return data
 
 
 static func _restore_actor(actor: Node, data: Dictionary) -> void:
 	actor.set("logical_position", data["position"])
 	actor.set("floor_level", data["floor"])
 	actor.set("stair_id", data["stair"])
+	actor.appearance.load_save_data(data["appearance"])
+	if not actor is PlayerController:
+		actor.inventory.wearer_gender = actor.appearance.gender
+		for slot: String in InventoryGrid.ROOTS:
+			actor.inventory.contents(slot).clear()
+			for entry in data["wardrobe"][slot]: actor.inventory.contents(slot).append(_unpack_item(entry))
+		actor.inventory.revision += 1
+
+static func _valid_appearance(data: Variant, wardrobe: bool) -> bool:
+	if not data is Dictionary or not CharacterAppearance.valid(data.get("appearance")): return false
+	if not wardrobe: return true
+	if not data.get("wardrobe") is Dictionary: return false
+	var inventory := InventoryGrid.new()
+	inventory.wearer_gender = data["appearance"]["gender"]
+	for slot: String in InventoryGrid.ROOTS:
+		if not data["wardrobe"].get(slot) is Array: return false
+		for item in data["wardrobe"][slot]:
+			if not _valid_item(item): return false
+			inventory.contents(slot).append(_unpack_item(item))
+	return inventory.all_valid()
 
 
 static func _valid_actor(data: Variant, map: WorldMap) -> bool:
@@ -460,10 +497,11 @@ static func _valid_pack_action(action: Variant, queue: Variant, player_data: Dic
 	var steps: Array = queue.duplicate()
 	steps.append(action.get("payload"))
 	for step in steps:
-		if not step is Dictionary or not step.get("step") in ["move", "take", "use", "return", "wear", "unwear", "repair", "treat"]: return false
+		if not step is Dictionary or not step.get("step") in ["move", "take", "use", "return", "wear", "unwear", "repair", "treat", "wash", "fill"]: return false
 		if not step.get("uid") is String or not step.get("destination") is String: return false
 		if step.get("step") == "repair" and (not step.get("region") is String or not step.get("rag_uid") is String): return false
 		if step.get("step") == "treat" and (not step.get("wound_id") is String or not step.get("treatment") is String): return false
+		if step.get("step") == "wash" and (not step.get("water_uid") is String or not _number(step.get("absorption"))): return false
 		if not step.get("index", 1) is int or not step.get("total", 1) is int or step.get("index", 1) < 1 or step.get("total", 1) < step.get("index", 1): return false
 		if step["step"] == "take" and (not step.get("origin") is String or not step.get("return_after") is bool): return false
 		for flag in ["free_hand", "pickup", "displace"]:
@@ -609,7 +647,7 @@ static func _migrate_v10(source: Dictionary) -> Dictionary:
 
 static func _migrate_v11(source: Dictionary) -> Dictionary:
 	var data := source.duplicate(true)
-	data["version"] = VERSION
+	data["version"] = 12
 	var now := float(data.get("clock", 0.0))
 	if data.get("zombies") is Array:
 		for entry in data["zombies"]:
@@ -624,6 +662,41 @@ static func _migrate_v11(source: Dictionary) -> Dictionary:
 			var fallback_seed := int(absf(position.x * 92821.0 + position.y * 68917.0 + float(floor) * 19391.0)) % 2147483646 + 1
 			perception["wander_seed"] = maxi(1, int(perception.get("wander_seed", fallback_seed)))
 			entry["perception"] = perception
+	return _migrate_v12(data)
+
+static func _migrate_v12(source: Dictionary) -> Dictionary:
+	# Migrate a detached copy. Old save files and owned item instances stay intact.
+	var data := source.duplicate(true)
+	data["version"] = 13
+	if data.get("inventory") is Dictionary:
+		for slot: String in ["underwear_top", "underwear_bottom", "socks", "belt", "neck", "badge", "medical_support"]:
+			if not data["inventory"].has(slot): data["inventory"][slot] = []
+	var actors: Array = [data.get("player"), data.get("npc")]
+	if data.get("zombies") is Array: actors.append_array(data["zombies"])
+	for index in actors.size():
+		var actor: Variant = actors[index]
+		if not actor is Dictionary: continue
+		if not actor.has("appearance"): actor["appearance"] = {"gender": "male", "hair": "original"}
+		if index > 0 and not actor.has("wardrobe"):
+			actor["wardrobe"] = {}
+			for slot: String in InventoryGrid.ROOTS: actor["wardrobe"][slot] = []
+	return _migrate_v13(data)
+
+static func _migrate_v13(source: Dictionary) -> Dictionary:
+	# v13 stored fatigue as a rested reserve. v14 stores accumulated tiredness.
+	# Migrate a detached copy so the original slot remains available for recovery.
+	var data := source.duplicate(true)
+	data["version"] = VERSION
+	var survival_entries: Array = [data.get("survival")]
+	var npc: Variant = data.get("npc", {})
+	if npc is Dictionary: survival_entries.append(npc.get("survival"))
+	for survival_data in survival_entries:
+		if survival_data is Dictionary:
+			survival_data["fatigue"] = 100.0 - clampf(float(survival_data.get("fatigue", 100.0)), 0.0, 100.0)
+	if data.get("player_status") is Dictionary:
+		data["player_status"]["effects"] = data["player_status"].get("effects", {})
+		for key in ["anxiety", "nausea", "dizziness"]:
+			if not data["player_status"].has(key): data["player_status"][key] = 0.0
 	return data
 
 static func _valid_zombie_perception(data: Variant) -> bool:

@@ -153,7 +153,7 @@ static func save_pitch(game: MVPGameRoot, check: Callable) -> void:
 	var original := QuickSave.snapshot(game)
 	var speed := GameTime.speed_mode
 	game.player.look_pitch = -0.6
-	var path := "user://first_person_pitch_test.save"
+	var path := OS.get_temp_dir().path_join("afterlight-first-person-pitch-%d.save" % Time.get_ticks_usec())
 	check.call(QuickSave.save_game(game, path), "pitch save is written through normal save validation")
 	game.player.look_pitch = 0.5
 	check.call(QuickSave.load_game(game, path) and is_equal_approx(game.player.look_pitch, -0.6)

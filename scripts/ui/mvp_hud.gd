@@ -244,7 +244,7 @@ func _status_icons(state: PlayerState) -> String:
 	var entries: Array[String] = []
 	for data in [
 		["🍽", state.survival.hunger, true], ["💧", state.survival.thirst, true],
-		["☾", state.survival.fatigue, true], ["⚡", state.survival.stamina, true],
+		["☾", state.survival.fatigue, false], ["⚡", state.survival.stamina, true],
 		["✚", state.pain, false], ["!", state.panic, false], ["≈", state.stress, false],
 		["…", state.boredom, false], ["☹", state.unhappiness, false]]:
 		var tier := StatusConfig.severity_tier(data[1], data[2])

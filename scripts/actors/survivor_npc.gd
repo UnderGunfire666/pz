@@ -1,6 +1,10 @@
 class_name SurvivorNPC
 extends Node2D
 
+var appearance := CharacterAppearance.new()
+var inventory := InventoryGrid.new()
+var clothing := ClothingSystem.new(inventory)
+
 ## One survivor shares the player's world traversal and finite container stock.
 const MOVE_SPEED := 0.95
 const SEARCH_GAME_SECONDS := 90.0
@@ -54,6 +58,11 @@ func setup(p_world_map: WorldMap, start_position: Vector2, p_player: PlayerContr
 	player = p_player
 	logical_position = start_position
 	target_position = start_position
+	var outfit_rng := RandomNumberGenerator.new()
+	outfit_rng.randomize()
+	appearance.randomize(outfit_rng)
+	inventory.wearer_gender = appearance.gender
+	ClothingCatalog.dress(inventory, outfit_rng)
 	if world_map.definition.id != "orangeville_prototype":
 		home_position = start_position
 		home_floor = 0
@@ -319,7 +328,7 @@ func _nearest_zombie(max_range: float = 4.5) -> ZombieActor:
 	var nearest_distance := INF
 	for actor in get_tree().get_nodes_in_group("zombies"):
 		var zombie := actor as ZombieActor
-		if zombie == null or zombie.health <= 0 or zombie.is_queued_for_deletion():
+		if zombie == null or zombie.health <= 0 or zombie.is_queued_for_deletion() or not zombie.simulation_active:
 			continue
 		if zombie.world_map != world_map: continue
 		var distance := ActorPerception.point(world_map, logical_position, floor_level, stair_id, 0.0).distance_to(

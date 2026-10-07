@@ -5,13 +5,15 @@ extends RefCounted
 var loose: Array[ItemStack] = []
 var equipment: Array[ItemStack] = []
 const HANDS := ["left_hand", "right_hand", "two_hands"]
-const CLOTHING_SLOTS := ["inner_top", "outer_top", "inner_bottom", "outer_bottom", "hat", "glasses", "mask", "shoes", "gloves"]
+const CLOTHING_SLOTS := ["inner_top", "outer_top", "inner_bottom", "outer_bottom", "hat", "glasses", "mask", "shoes", "gloves", "underwear_top", "underwear_bottom", "socks", "belt", "neck", "badge", "medical_support"]
 const BODY_REGIONS := ["Head", "Torso", "Left Arm", "Right Arm", "Left Hand", "Right Hand", "Left Leg", "Right Leg", "Left Foot", "Right Foot"]
 const ROOTS := ["loose", "equipment", "left_hand", "right_hand", "two_hands",
-	"inner_top", "outer_top", "inner_bottom", "outer_bottom", "hat", "glasses", "mask", "shoes", "gloves"]
+	"inner_top", "outer_top", "inner_bottom", "outer_bottom", "hat", "glasses", "mask", "shoes", "gloves", "underwear_top", "underwear_bottom", "socks", "belt", "neck", "badge", "medical_support"]
 var hands := {"left_hand": [], "right_hand": [], "two_hands": []}
 var clothing := {"inner_top": [], "outer_top": [], "inner_bottom": [], "outer_bottom": [],
-	"hat": [], "glasses": [], "mask": [], "shoes": [], "gloves": []}
+	"hat": [], "glasses": [], "mask": [], "shoes": [], "gloves": [],
+	"underwear_top": [], "underwear_bottom": [], "socks": [], "belt": [], "neck": [], "badge": [], "medical_support": []}
+var wearer_gender := "male"
 var strength := 0
 var world: Dictionary = {}
 var penalty_limit := 12.0
@@ -19,13 +21,14 @@ var absolute_limit := 30.0
 var use_context: Dictionary = {}
 var last_error := ""
 var revision := 0
+var _item_state_accumulator := 0.0
 var equipped: ItemStack:
 	get: return equipment[0] if not equipment.is_empty() else null
 
 func _init(starter_pack: bool = false, creation_strength: int = 0) -> void:
 	strength = maxi(0, creation_strength)
 	if starter_pack:
-		equipment.append(ItemStack.new(ItemDefinition.backpack("starter_pack", "Canvas backpack", Vector3(30, 15, 40), 0.8, 0.1)))
+		equipment.append(ItemStack.new(ItemCatalog.backpack_definitions()["small_backpack"]))
 
 func current_weight() -> float:
 	var weight := 0.0
@@ -47,6 +50,7 @@ func preview_moves(moves: Array) -> bool:
 	var trial := InventoryGrid.new(false)
 	trial.absolute_limit = absolute_limit
 	trial.strength = strength
+	trial.wearer_gender = wearer_gender
 	for root in ROOTS:
 		for stack: ItemStack in contents(root): trial.contents(root).append(InventoryCodec.unpack(InventoryCodec.pack(stack)))
 	for id in world:
@@ -162,6 +166,12 @@ func held_weapon() -> ItemStack:
 			if "weapon" in stack.definition.tags: return stack
 	return null
 
+func held_tag(tag: String) -> bool:
+	for slot in HANDS:
+		for stack: ItemStack in hands[slot]:
+			if tag in stack.definition.tags: return true
+	return false
+
 func attack_damage() -> int:
 	var weapon := held_weapon()
 	return maxi(1, weapon.definition.weapon_damage) if weapon != null else 1
@@ -197,6 +207,9 @@ func remove_unit(uid: String) -> Dictionary:
 	revision += 1
 	return found
 
+func can_wear(item: ItemDefinition) -> bool:
+	return item.clothing_gender.is_empty() or item.clothing_gender == wearer_gender
+
 func move_unit(uid: String, destination: String) -> bool:
 	last_error = ""
 	var found := find_unit(uid)
@@ -217,6 +230,9 @@ func move_unit(uid: String, destination: String) -> bool:
 		return false
 	if destination in CLOTHING_SLOTS and (not clothing[destination].is_empty() or stack.definition.clothing_slot != destination):
 		last_error = "Clothing is incompatible with that slot."
+		return false
+	if destination in CLOTHING_SLOTS and not can_wear(stack.definition):
+		last_error = "This underwear is fitted for %s characters." % stack.definition.clothing_gender
 		return false
 	var target := contents(destination)
 	if world.has(destination):
@@ -298,18 +314,58 @@ func sort_items() -> void:
 	contents(default_destination()).sort_custom(func(a: ItemStack, b: ItemStack) -> bool: return a.definition.display_name < b.definition.display_name)
 	revision += 1
 
+## Item simulation is batched by game minute so large inventories do not create a
+## per-frame traversal cost. Definitions are static; only units are mutated.
+func advance_item_states(game_seconds: float) -> void:
+	if game_seconds <= 0.0: return
+	_item_state_accumulator += game_seconds
+	if _item_state_accumulator < 60.0: return
+	var elapsed := _item_state_accumulator
+	_item_state_accumulator = 0.0
+	var ambient := StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds)
+	var changed := false
+	for root in ROOTS:
+		changed = _advance_stack_states(contents(root), elapsed, ambient) or changed
+	for container: ContainerData in world.values():
+		var target := container.temperature_target if is_finite(container.temperature_target) else ambient
+		changed = _advance_stack_states(container.contents, elapsed, target) or changed
+	if changed: revision += 1
+
+func _advance_stack_states(items: Array, game_seconds: float, environment_temperature: float) -> bool:
+	var changed := false
+	for stack: ItemStack in items:
+		for unit in stack.units:
+			var item := stack.definition
+			if "food" in item.tags or "water" in item.tags or "liquid" in item.tags:
+				var previous_temperature := float(unit.get("temperature", environment_temperature))
+				var rate := maxf(0.0, 1.0 + environment_temperature * 0.02)
+				var temperature := move_toward(previous_temperature, environment_temperature, rate * game_seconds / 3600.0)
+				if not is_equal_approx(temperature, previous_temperature):
+					unit["temperature"] = temperature
+					changed = true
+				if item.freshness_lifetime_days > 0.0 and (not item.requires_opening or bool(unit.get("opened", false))):
+					var previous_freshness := float(unit.get("freshness", 100.0))
+					var multiplier := pow(2.0, (temperature - 20.0) / 10.0)
+					var freshness := maxf(0.0, previous_freshness - game_seconds / (item.freshness_lifetime_days * 86400.0) * 100.0 * multiplier)
+					if not is_equal_approx(freshness, previous_freshness):
+						unit["freshness"] = freshness
+						changed = true
+			changed = _advance_stack_states(unit["contents"], game_seconds, environment_temperature) or changed
+	return changed
+
 func summary() -> String:
 	var labels: Array[String] = []
 	for stack: ItemStack in contents(default_destination()): labels.append(stack.label())
 	return ", ".join(labels) if not labels.is_empty() else "Empty"
 
 func all_valid() -> bool:
+	if wearer_gender not in ["male", "female"]: return false
 	if strength < 0 or not hands_error().is_empty(): return false
 	for slot in CLOTHING_SLOTS:
 		if clothing[slot].size() > 1: return false
 		if not clothing[slot].is_empty():
 			var garment: ItemStack = clothing[slot][0]
-			if garment.quantity != 1 or garment.definition.clothing_slot != slot: return false
+			if garment.quantity != 1 or garment.definition.clothing_slot != slot or not can_wear(garment.definition): return false
 	if equipment.size() > 1: return false
 	if equipped != null and (equipped.quantity != 1 or not "backpack" in equipped.definition.tags or equipped.units[0]["durability"] <= 0): return false
 	var ids := {}
@@ -353,6 +409,11 @@ func _valid_tree(items: Array, ids: Dictionary, depth: int) -> bool:
 			ids[unit["uid"]] = true
 			if not is_finite(float(unit["durability"])) or unit["durability"] < 0 or unit["durability"] > 100: return false
 			if not unit.get("switched_on", false) is bool or (unit.get("switched_on", false) and not item.switchable): return false
+			for key in ["freshness", "temperature", "liquid_ml", "bandage_absorption"]:
+				var state_value: Variant = unit.get(key, 100.0 if key == "freshness" else 0.0)
+				if not (state_value is float or state_value is int) or not is_finite(float(state_value)): return false
+			if float(unit.get("freshness", 100.0)) < 0.0 or float(unit.get("freshness", 100.0)) > 100.0 or float(unit.get("liquid_ml", 0.0)) < 0.0: return false
+			if not unit.get("opened", true) is bool or not unit.get("bandage_disinfected", false) is bool or not unit.get("appearance", "default") is String or unit.get("cooking_state", "raw") not in ["raw", "cooked", "burnt"]: return false
 			if not unit.get("clothing_durability", {}) is Dictionary: return false
 			var region_durability: Dictionary = unit.get("clothing_durability", {})
 			if not item.clothing_slot.is_empty():

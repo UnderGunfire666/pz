@@ -269,6 +269,13 @@ func _update_actors(delta: float = 0.0) -> void:
 		if visual.is_empty():
 			visual = _create_actor_visual(node)
 			actor_visuals[actor_id] = visual
+		var appearance_key: String = node.appearance.gender + ":" + node.appearance.hair
+		if String(visual.get("appearance_key", "")) != appearance_key:
+			_remove_actor_visual(actor_id, visual)
+			visual = _create_actor_visual(node)
+			actor_visuals[actor_id] = visual
+		var clothes_model: MixamoCharacterVisual = visual["character_model"]
+		clothes_model.clothing_visual.refresh()
 		var model: Node3D = visual["root"]
 		model.visible = node != player or view_rig.shows_local_body()
 		if bool(visual["has_health"]):
@@ -281,10 +288,18 @@ func _update_actors(delta: float = 0.0) -> void:
 			var held_id := _player_held_item_id()
 			var equipment_changed: bool = String(visual.get("held_item_id", held_id)) != held_id
 			visual["held_item_id"] = held_id
-			if player.aim_mode:
+			var committed_split_attack := player.visual_attack_remaining > 0.0 \
+				and player_character.upper_animation_player.is_playing() \
+				and player_character.upper_animation_player.get_current_animation() == "attack"
+			if player.aim_mode or committed_split_attack:
 				var upper := "armed_idle"
 				var restart_upper_attack := false
-				if int(visual.get("attack_id", 0)) != player.visual_attack_id:
+				if committed_split_attack:
+					# Releasing RMB must not replace an in-progress upper-body strike
+					# with a fresh, larger full-body attack. Keep this exact clip until
+					# its authoritative attack window ends.
+					upper = "attack"
+				elif int(visual.get("attack_id", 0)) != player.visual_attack_id:
 					visual["attack_id"] = player.visual_attack_id
 					upper = "attack"
 					restart_upper_attack = true
@@ -293,11 +308,8 @@ func _update_actors(delta: float = 0.0) -> void:
 				player_character.advance_split_animation(delta, _player_animation(), _player_animation_speed(), upper, restart_upper_attack,
 					PlayerController.ATTACK_ANIMATION_SPEED if upper == "attack" else 1.0)
 			else:
-				# Leaving right-click preparation immediately removes both partial layers.
-				# An already committed attack continues as one full-body clip.
-				var full_body := "attack" if player.visual_attack_remaining > 0.0 else _player_animation()
-				var full_speed := PlayerController.ATTACK_ANIMATION_SPEED if full_body == "attack" else _player_animation_speed()
-				player_character.advance_animation(delta, full_body, full_speed)
+				# No prepared strike remains, so the complete locomotion clip owns the pose.
+				player_character.advance_animation(delta, _player_animation(), _player_animation_speed())
 			player_character.set_region_flash(player.visual_hit_region, player.visual_damage_remaining)
 		elif node is ZombieActor:
 			var zombie := node as ZombieActor
@@ -310,30 +322,32 @@ func _update_actors(delta: float = 0.0) -> void:
 			visual["last_render_position"] = model.position
 			var character := visual["character_model"] as MixamoCharacterVisual
 			character.set_region_flash(zombie.last_hit_region, zombie._damage_flash_left)
+			var animation_interval := 0.0 if zombie.visual_attack_remaining > 0.0 else MixamoCharacterVisual.animation_interval_for_distance(model.global_position.distance_to(camera.global_position))
 			if zombie.visual_attack_remaining > 0.0:
 				if int(visual.get("attack_id", 0)) != zombie.visual_attack_id:
 					character.play_animation("attack", 0.0, 1.0, true)
 					visual["attack_id"] = zombie.visual_attack_id
-				character.advance_animation(delta, "attack", 1.0)
+				character.advance_animation_throttled(delta, "attack", 1.0, animation_interval)
 			elif motion_speed > 0.04:
 				var chasing := zombie.awareness in [ZombieActor.Awareness.VISUAL, ZombieActor.Awareness.VISUAL_MEMORY]
-				character.advance_animation(delta, "run" if chasing else "walk", clampf(motion_speed / 0.58, 0.65, 1.5))
+				character.advance_animation_throttled(delta, "run" if chasing else "walk", clampf(motion_speed / 0.58, 0.65, 1.5), animation_interval)
 			else:
-				character.advance_animation(delta, "idle", 1.0)
+				character.advance_animation_throttled(delta, "idle", 1.0, animation_interval)
 		elif node is SurvivorNPC:
 			var direction: Vector2 = node.facing_direction
 			model.rotation.y = atan2(-direction.x, -direction.y)
 			var npc_character := visual["character_model"] as MixamoCharacterVisual
 			npc_character.set_region_flash(node.visual_hit_region, node.visual_damage_remaining)
+			var animation_interval := 0.0 if node.visual_attack_remaining > 0.0 else MixamoCharacterVisual.animation_interval_for_distance(model.global_position.distance_to(camera.global_position))
 			if node.visual_attack_remaining > 0.0:
 				if int(visual.get("attack_id", 0)) != node.visual_attack_id:
 					npc_character.play_animation("attack", 0.0, 1.0, true)
 					visual["attack_id"] = node.visual_attack_id
-				npc_character.advance_animation(delta, "attack", 1.0)
+				npc_character.advance_animation_throttled(delta, "attack", 1.0, animation_interval)
 			elif node.visual_velocity.length() > 0.04:
-				npc_character.advance_animation(delta, "walk", clampf(node.visual_velocity.length() / SurvivorNPC.MOVE_SPEED, 0.65, 1.35))
+				npc_character.advance_animation_throttled(delta, "walk", clampf(node.visual_velocity.length() / SurvivorNPC.MOVE_SPEED, 0.65, 1.35), animation_interval)
 			else:
-				npc_character.advance_animation(delta, "idle", 1.0)
+				npc_character.advance_animation_throttled(delta, "idle", 1.0, animation_interval)
 		if bool(visual["has_health"]):
 			var bar: Node3D = visual["health_bar"]
 			bar.global_position = model.global_position + Vector3(0.0, 2.05, 0.0)
@@ -392,7 +406,9 @@ func _create_actor_visual(actor: Node2D) -> Dictionary:
 		var imported := MixamoCharacterVisual.new()
 		imported.name = "CharacterModel"
 		root.add_child(imported)
-		imported.setup(ActorBody.profile(actor), actor == player)
+		imported.setup(ActorBody.ZOMBIE if has_health else actor.appearance.model_profile(), actor == player)
+		imported.bind_clothing(player.state.inventory if actor == player else actor.inventory, actor.appearance, has_health)
+		visual["appearance_key"] = actor.appearance.gender + ":" + actor.appearance.hair
 		visual["character_model"] = imported
 		if actor == player: third_person_equipment.bind_body(imported)
 	else:

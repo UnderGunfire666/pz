@@ -1,6 +1,8 @@
 class_name PlayerController
 extends Node2D
 
+var appearance := CharacterAppearance.new()
+
 signal attack_impact_requested(world_position: Vector2, direction: Vector2)
 signal moved(world_position: Vector2)
 signal action_intent()

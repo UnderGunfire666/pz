@@ -68,6 +68,7 @@ func _ready() -> void:
 	player_state.setup_character(character_catalog)
 	player_state.setup_inventory(inventory)
 	inventory.contents("two_hands").append(ItemStack.new(ItemDefinition.baseball_bat()))
+	ClothingCatalog.starter_outfit(inventory)
 	inventory.revision += 1
 	player.name = "Player"
 	actor_layer.add_child(player)
@@ -130,11 +131,15 @@ func _process(delta: float) -> void:
 	_sync_mouse_capture()
 	var game_seconds := GameTime.last_advanced_game_seconds
 	if game_seconds > 0.0 and not player_state.is_dead():
+		StatusConfig.AMBIENT_TEMPERATURE = StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds)
 		var nearby_counts := local_zombie_counts()
 		if interactions.is_resting() and int(nearby_counts["danger"]) > 0:
 			interactions.interrupt_action("Danger woke you")
 		player_state.advance(game_seconds, player.exertion(), interactions.is_resting(),
 			int(nearby_counts["nearby"]), player.exertion() > 0.0)
+		if interactions.is_resting() and not player_state.effect_active("sleeping_pill") and (player_state.pain >= 60.0 or player_state.anxiety >= 60.0):
+			interactions.interrupt_action("Pain or anxiety woke you")
+		inventory.advance_item_states(game_seconds)
 
 	_update_milestones()
 	notification_seconds_left = maxf(0.0, notification_seconds_left - delta)

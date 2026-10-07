@@ -1,6 +1,10 @@
 class_name ZombieActor
 extends Node2D
 
+var appearance := CharacterAppearance.new()
+var inventory := InventoryGrid.new()
+var clothing := ClothingSystem.new(inventory)
+
 signal died(zombie: ZombieActor)
 signal attacked_player(world_position: Vector2)
 
@@ -71,6 +75,11 @@ var _attack_target: Node
 func setup(p_world_map: WorldMap, p_player: PlayerController, p_player_state: PlayerState,
 		start_position: Vector2, start_floor: int = 0, p_rules: ZombieWorldRules = null) -> void:
 	world_map = p_world_map
+	var outfit_rng := RandomNumberGenerator.new()
+	outfit_rng.seed = int(absf(start_position.x * 92821.0 + start_position.y * 68917.0)) + start_floor * 19391
+	# The retained zombie body is male; underwear follows its body type.
+	inventory.wearer_gender = appearance.gender
+	ClothingCatalog.dress(inventory, outfit_rng)
 	player = p_player
 	player_state = p_player_state
 	world_rules = p_rules
@@ -258,8 +267,12 @@ func hear_noise(stimulus: NoiseStimulus) -> void:
 	if heard.is_empty(): return
 	if float(heard["strength"]) < _rule("hearing_threshold", 0.55): return
 	# A last visual observation remains stronger evidence during its switch lock.
-	# While investigating sound, a fresh sound replaces the old clue immediately.
+	# While investigating a sound, compare received strength rather than the
+	# emitter's loudness: a distant loud event must not replace a clearer clue.
 	if now < stimulus_lock_until and awareness == Awareness.VISUAL_MEMORY:
+		return
+	if now < stimulus_lock_until and awareness == Awareness.SOUND \
+		and float(heard["strength"]) <= last_heard_strength:
 		return
 	if stimulus.world_time == last_stimulus_time and not last_hearing.is_empty():
 		var previous_position: Vector2 = last_hearing.get("position", Vector2.INF)

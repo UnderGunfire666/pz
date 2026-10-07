@@ -16,18 +16,24 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	var lower_owns_upper_body := false
 	for track in player_walk.get_track_count():
 		var path := String(player_walk.track_get_path(track))
-		remapped_leg = remapped_leg or ("Skeleton3D:mixamorig_LeftUpLeg" in path)
-		if "Skeleton3D:mixamorig_LeftArm" in path:
-			lower_owns_upper_body = player_walk.track_is_enabled(track)
+		remapped_leg = remapped_leg or ("Skeleton3D:thigh_l" in path)
+	var lower_walk := player_visual.lower_animation_player.get_animation("walk")
+	for track in lower_walk.get_track_count():
+		if "Skeleton3D:upperarm_l" in String(lower_walk.track_get_path(track)):
+			lower_owns_upper_body = lower_walk.track_is_enabled(track)
 	check.call(remapped_leg, "player walking clip targets the Player skeleton after Mixamo bone-name retargeting")
 	var upper_walk: Animation = player_visual.upper_animation_player.get_animation("walk")
 	var upper_owns_arm := false
 	for track in upper_walk.get_track_count():
-		if "Skeleton3D:mixamorig_LeftArm" in String(upper_walk.track_get_path(track)):
+		if "Skeleton3D:upperarm_l" in String(upper_walk.track_get_path(track)):
 			upper_owns_arm = upper_walk.track_is_enabled(track)
 	check.call(not lower_owns_upper_body and upper_owns_arm, "player locomotion isolates arm tracks into the upper-body layer")
 	player_visual.advance_animation(0.1, "run", 1.0)
 	check.call(player_visual.animation_player.get_current_animation() == "run", "player visual can switch to running clip")
+	check.call(is_zero_approx(MixamoCharacterVisual.animation_interval_for_distance(7.9))
+		and is_equal_approx(MixamoCharacterVisual.animation_interval_for_distance(8.0), 1.0 / 30.0)
+		and is_equal_approx(MixamoCharacterVisual.animation_interval_for_distance(14.0), 1.0 / 15.0),
+		"far-character animation cadence keeps nearby animation at full frequency")
 	game.player.aim_mode = false
 	game.player.visual_velocity = Vector2.ZERO
 	view._update_actors(0.1)
@@ -40,15 +46,26 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 	game.player.aim_mode = true
 	game.player.try_attack()
 	check.call(game.player.visual_attack_id == attack_id_before + 1, "right-click ready stance permits the player attack")
-	game.player.interrupt_attack()
-	game.player._attack_cooldown_left = 0.0
-	game.player.aim_mode = true
-	game.player.visual_attack_id += 1
-	view._update_actors(0.1)
+	view._update_actors(0.10)
 	check.call(player_visual.upper_animation_player.is_playing() and player_visual.upper_animation_player.get_current_animation() == "attack"
 		and player_visual.lower_animation_player.get_current_animation() != "attack"
 		and is_equal_approx(player_visual.upper_animation_player.get_playing_speed(), PlayerController.ATTACK_ANIMATION_SPEED),
-		"player attack event overlays only the downloaded upper-body attack clip at double speed")
+		"player attack uses only the upper-body attack clip at double speed")
+	var prepared_phase := player_visual.upper_animation_player.get_current_animation_position()
+	game.player.aim_mode = false
+	view._update_actors(0.10)
+	var released_phase := player_visual.upper_animation_player.get_current_animation_position()
+	check.call(player_visual.upper_animation_player.is_playing() and player_visual.upper_animation_player.get_current_animation() == "attack"
+		and not player_visual.animation_player.is_playing() and released_phase > prepared_phase,
+		"releasing right-click keeps the original upper-body attack instead of starting a larger full-body replay")
+	view._update_actors(0.10)
+	check.call(player_visual.upper_animation_player.get_current_animation_position() > released_phase,
+		"released attack advances once on its original animation track")
+	game.player.visual_attack_remaining = 0.0
+	view._update_actors(0.10)
+	check.call(player_visual.animation_player.is_playing() and not player_visual.upper_animation_player.is_playing(),
+		"complete attack returns to one full-body locomotion animation")
+	game.player.interrupt_attack()
 	game.player.aim_mode = true
 	game.player.visual_attack_remaining = 0.0
 	game.player.visual_velocity = Vector2.ZERO

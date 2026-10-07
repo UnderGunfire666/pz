@@ -271,6 +271,11 @@ func open_context(side: int, position: Vector2) -> void:
 	_menu_entry(11, "Remove clothing", "" if found["owner"] in InventoryGrid.CLOTHING_SLOTS else "not currently worn")
 	_menu_entry(12, "Switch %s" % ("off" if found["unit"].get("switched_on", false) else "on"),
 		"" if found["stack"].definition.switchable and found["owner"] in InventoryGrid.HANDS else "switchable equipment must be held")
+	if "bandage" in tags:
+		_menu_entry(13, "Disinfect bandage", "" if float(found["unit"].get("bandage_absorption", 0.0)) <= 0.0 else "wash bloodied bandages first")
+		_menu_entry(14, "Wash bandage", "" if float(found["unit"].get("bandage_absorption", 0.0)) > 0.0 and float(found["unit"].get("bandage_absorption", 0.0)) < 28.0 else "requires a bloodied non-dirty bandage")
+	if found["stack"].definition.id in ["empty_can", "empty_bottle"]:
+		_menu_entry(15, "Fill with water", game.interactions.refill_reason(uid))
 	context["repair_regions"] = found["stack"].definition.clothing_regions.duplicate()
 	for index in range(context["repair_regions"].size()):
 		var region: String = context["repair_regions"][index]
@@ -304,6 +309,9 @@ func _context_action(id: int) -> void:
 			if not found.is_empty(): game.interactions.request_remove_clothing(found["owner"])
 		12:
 			if game.inventory.toggle_switchable(uid): game.show_notification("Equipment switched.")
+		13: game.interactions.request_disinfect_bandage(uid)
+		14: game.interactions.request_wash_bandage(uid)
+		15: game.interactions.request_refill_water_container(uid)
 		_: 
 			if id >= 100 and id - 100 < context.get("repair_regions", []).size():
 				game.interactions.request_repair(uid, context["repair_regions"][id - 100])
@@ -405,6 +413,15 @@ func tooltip_text(data: Dictionary) -> String:
 		text += "\nCapacity %.1f / %.1f cm³\nContents %.3f kg · durability %d\nReduction %d%% (equipped backpack only)" % [
 			single.used_volume(), stack.definition.capacity(), single.total_weight() - stack.definition.unit_weight,
 			unit["durability"], stack.definition.weight_reduction * 100]
+	if not stack.definition.appearance_variants.is_empty(): text += "\nAppearance: %s" % unit.get("appearance", "default")
+	if stack.definition.freshness_lifetime_days > 0.0:
+		var freshness := float(unit.get("freshness", 100.0))
+		var freshness_label := "Fresh" if freshness >= 50.0 else ("Stale" if freshness > 0.0 else "Spoiled")
+		text += "\nFreshness: %.0f (%s) · %.1f°C" % [freshness, freshness_label, float(unit.get("temperature", 20.0))]
+	if stack.definition.cooking_state_supported: text += "\nCooking: %s" % String(unit.get("cooking_state", "raw")).capitalize()
+	if stack.definition.requires_opening: text += "\n%s" % ("Opened" if unit.get("opened", false) else "Sealed")
+	if stack.definition.liquid_capacity_ml > 0.0: text += "\nLiquid: %.0f / %.0f mL" % [float(unit.get("liquid_ml", 0.0)), stack.definition.liquid_capacity_ml]
+	if "bandage" in stack.definition.tags: text += "\nAbsorbed blood: %.1f / 28%s" % [float(unit.get("bandage_absorption", 0.0)), " · disinfected" if unit.get("bandage_disinfected", false) else ""]
 	if not stack.definition.clothing_slot.is_empty():
 		text += "\n" + clothing_summary(stack)
 	if stack.definition.switchable:
@@ -412,6 +429,7 @@ func tooltip_text(data: Dictionary) -> String:
 	if stack.definition.hunger_restore != 0.0 or stack.definition.thirst_restore != 0.0 or stack.definition.happiness_effect != 0.0:
 		text += "\nEffects: hunger %+.0f · thirst %+.0f · happiness %+.0f" % [stack.definition.hunger_restore,
 			stack.definition.thirst_restore, stack.definition.happiness_effect]
+	if stack.definition.calories > 0.0: text += "\nCalories: %.0f kcal" % stack.definition.calories
 	if not stack.definition.medical_action.is_empty(): text += "\nTreatment: %s" % stack.definition.medical_action.capitalize().replace("_", " ")
 	if not stack.definition.weapon_attack_type.is_empty():
 		text += "\nAttack: %s · damage %d" % [stack.definition.weapon_attack_type, stack.definition.weapon_damage]
@@ -421,6 +439,8 @@ func clothing_summary(stack: ItemStack) -> String:
 	if stack == null or stack.definition.clothing_slot.is_empty(): return ""
 	var unit: Dictionary = stack.units[0]
 	var lines: Array[String] = ["Worn slot: %s" % stack.definition.clothing_slot.capitalize()]
+	if not stack.definition.clothing_gender.is_empty(): lines.append("Fits: " + stack.definition.clothing_gender.capitalize())
+	if not stack.definition.outfit_group.is_empty(): lines.append("Outfit: " + stack.definition.outfit_group)
 	for region in stack.definition.clothing_regions:
 		lines.append("%s · protection %.0f%% · warmth %.1f · durability %.1f/%.1f" % [region,
 			float(stack.definition.clothing_protection.get(region, 0)), float(stack.definition.clothing_warmth.get(region, 0)),

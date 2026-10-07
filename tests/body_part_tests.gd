@@ -109,7 +109,7 @@ static func run(game: MVPGameRoot, check: Callable) -> void:
 		var legacy := snapshot.duplicate(true)
 		legacy["version"] = 10
 		for entry in legacy["zombies"]: entry.erase("body_health")
-		var path := "user://body_parts_v10_test.save"
+		var path := OS.get_temp_dir().path_join("afterlight-body-parts-v10-%d.save" % Time.get_ticks_usec())
 		var file := FileAccess.open(path, FileAccess.WRITE)
 		file.store_var(legacy, false)
 		file.close()

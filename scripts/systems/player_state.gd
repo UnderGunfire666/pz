@@ -21,6 +21,11 @@ var panic := 0.0
 var stress := 0.0
 var boredom := 0.0
 var unhappiness := 0.0
+var anxiety := 0.0
+var nausea := 0.0
+var dizziness := 0.0
+## Remaining game seconds for timed effects; booleans hold persistent subeffects.
+var effects: Dictionary = {}
 var core_temperature := StatusConfig.NORMAL_BODY_TEMPERATURE
 var zombie_virus_exposure := false
 var zombie_virus_deadline := -1.0
@@ -65,7 +70,10 @@ func add_wound(wound_type: String, location: String, severity: float, from_zombi
 		"location": region, "severity": severity,
 		"bleeding": severity * float(StatusConfig.BLEEDING_FACTOR.get(normalized_type, 0.25)),
 		"infection": 0.0, "wound_infection": false, "bandaged": false, "cleaned": false,
-		"splinted": false, "burn_dressed": false, "healing": false}
+		"splinted": false, "burn_dressed": false, "healing": false, "foreign_body": "none",
+		"requires_sutures": normalized_type == "Deep Wound", "bandage_absorption": 0.0,
+		"bandage_disinfected": false, "bandage_dirty": false, "bandage_bleed_rate": 0.0,
+		"bandage_item_id": ""}
 	wounds.append(wound)
 	body_health[region] = maxf(0.0, float(body_health.get(region, 100.0)) - severity)
 	if from_zombie: _try_virus_transmission(normalized_type, forced_virus_roll)
@@ -85,7 +93,8 @@ func advance(game_seconds: float, exertion: float = 0.0, sleeping: bool = false,
 		nearby_zombies: int = 0, exploring: bool = false) -> void:
 	if is_dead() or game_seconds <= 0.0: return
 	var heat := maxf(0.0, float(temperature_tier(true)) / 4.0)
-	survival.advance(game_seconds, exertion, sleeping, heat, stamina_recovery_multiplier())
+	_advance_effects(game_seconds, sleeping)
+	survival.advance(game_seconds, exertion, sleeping, heat, stamina_recovery_multiplier(), fatigue_rate_multiplier())
 	_advance_temperature(game_seconds, exertion)
 	_advance_wounds(game_seconds, sleeping)
 	_advance_emotions(game_seconds, nearby_zombies, exploring)
@@ -110,15 +119,20 @@ func _advance_wounds(game_seconds: float, sleeping: bool) -> void:
 	pain_relief = maxf(0.0, pain_relief - hours * 8.0)
 	for wound in wounds:
 		_normalize_wound(wound)
-		if not wound["bandaged"] and not wound["cleaned"]:
-			wound["infection"] = minf(100.0, float(wound["infection"]) + hours * float(wound["severity"]) * 0.025)
-		elif wound["cleaned"]:
-			wound["infection"] = maxf(0.0, float(wound["infection"]) - hours * 0.5)
+		var infection := float(wound["infection"])
+		var baseline := -0.5 if infection < 20.0 else (float(wound["severity"]) * 0.025 if infection > 20.0 else 0.0)
+		if bool(wound.get("bandage_disinfected", false)) and not bool(wound.get("bandage_dirty", false)): baseline -= 0.5
+		if bool(wound.get("bandage_dirty", false)): baseline += 1.0
+		if not wound["bandaged"] and not wound["cleaned"]: baseline = float(wound["severity"]) * 0.025
+		wound["infection"] = clampf(infection + hours * baseline, 0.0, 100.0)
+		if wound["bandaged"]:
+			wound["bandage_absorption"] = minf(28.0, float(wound.get("bandage_absorption", 0.0)) + hours * float(wound.get("bandage_bleed_rate", 0.0)))
+			wound["bandage_dirty"] = float(wound["bandage_absorption"]) >= 28.0
 		wound["wound_infection"] = float(wound["infection"]) > 0.0
-		var blocked: bool = (wound["type"] == "Fracture" and not wound["splinted"]) or (wound["type"] == "Burn" and not wound["burn_dressed"])
+		var blocked: bool = (wound["type"] == "Fracture" and not wound["splinted"]) or (wound["type"] == "Burn" and not wound["burn_dressed"]) or bool(wound.get("requires_sutures", false)) or String(wound.get("foreign_body", "none")) != "none"
 		wound["healing"] = not blocked and float(wound["bleeding"]) <= 0.0
 		if wound["healing"]:
-			var wellness := clampf((survival.hunger + survival.thirst + survival.fatigue + health) / 400.0, 0.2, 1.0)
+			var wellness := clampf((survival.hunger + survival.thirst + (100.0 - survival.fatigue) + health) / 400.0, 0.2, 1.0)
 			var healed := StatusConfig.BASE_HEALING_PER_HOUR * hours * wellness * maxf(0.1, 1.0 - float(wound["infection"]) / 125.0) * (1.5 if sleeping else 1.0)
 			wound["severity"] = maxf(0.0, float(wound["severity"]) - healed)
 			body_health[wound["region"]] = minf(100.0, float(body_health[wound["region"]]) + healed)
@@ -136,16 +150,41 @@ func _advance_temperature(game_seconds: float, exertion: float) -> void:
 func _advance_emotions(game_seconds: float, nearby_zombies: int, exploring: bool) -> void:
 	var hours := game_seconds / 3600.0
 	if nearby_zombies > 0:
-		panic = minf(100.0, panic + hours * nearby_zombies * 80.0 * (1.0 + stress / 100.0))
+		var gain := hours * nearby_zombies * 80.0 * (1.0 + stress / 100.0)
+		if effect_active("beta_blocker"): gain *= 0.5
+		panic = minf(maxf(50.0, panic) if effect_active("beta_blocker") else 100.0, panic + gain)
 		stress = minf(100.0, stress + hours * nearby_zombies * 18.0)
 	else:
-		panic = maxf(0.0, panic - hours * 35.0 * (1.0 - stress / 150.0))
+		panic = maxf(0.0, panic - hours * 35.0 * (2.0 if effect_active("beta_blocker") else 1.0) * (1.0 - stress / 150.0))
 		stress = maxf(0.0, stress - hours * 3.0)
 	if late_virus_symptoms():
 		stress = minf(100.0, stress + hours * 6.0)
 		unhappiness = minf(100.0, unhappiness + hours * 2.0)
 	boredom = maxf(0.0, boredom - hours * 24.0) if exploring else minf(100.0, boredom + hours * 2.0)
-	unhappiness = clampf(unhappiness + hours * (maxf(0.0, boredom - 50.0) * 0.05 + maxf(0.0, pain - 60.0) * 0.04) - hours * 0.5, 0.0, 100.0)
+	unhappiness = clampf(unhappiness + hours * (maxf(0.0, boredom - 50.0) * 0.05 + maxf(0.0, pain - 60.0) * 0.04) - hours * (0.5 + (2.5 if effect_active("antidepressant") else 0.0)), 0.0, 100.0)
+
+func effect_active(id: String) -> bool:
+	return float(effects.get(id, 0.0)) > 0.0
+
+func fatigue_rate_multiplier() -> float:
+	if effect_active("caffeine"):
+		# During the crash the pill's fatigue benefit is halved: its normal 50%
+		# reduction becomes the normal accumulation rate rather than overriding it.
+		return 1.0 if effect_active("caffeine_crash") else 0.5
+	return 2.0 if bool(effects.get("caffeine_crash_accelerated", false)) else 1.0
+
+func _advance_effects(game_seconds: float, sleeping: bool) -> void:
+	var caffeine_active := effect_active("caffeine")
+	for id in ["beta_blocker", "antidepressant", "caffeine", "sleeping_pill", "nausea", "anxiety", "dizziness", "sleeping_pill_overdose", "weak_breathing", "limb_weakness", "muscle_soreness"]:
+		if effect_active(id): effects[id] = maxf(0.0, float(effects[id]) - game_seconds)
+	if caffeine_active and not effect_active("caffeine"):
+		effects["caffeine_crash"] = 3.0 * 86400.0
+		effects["caffeine_crash_accelerated"] = true
+	if effect_active("caffeine_crash"): effects["caffeine_crash"] = maxf(0.0, float(effects["caffeine_crash"]) - game_seconds)
+	if sleeping and survival.fatigue <= 0.0: effects["caffeine_crash_accelerated"] = false
+	anxiety = 100.0 if effect_active("anxiety") else 0.0
+	nausea = 100.0 if effect_active("nausea") else 0.0
+	dizziness = 100.0 if effect_active("dizziness") else 0.0
 
 func _advance_virus() -> void:
 	if not zombie_virus_exposure or zombie_virus_deadline <= 0.0: return
@@ -156,10 +195,41 @@ func treat_wound(wound_id: String, treatment: String) -> bool:
 		pain_relief = minf(100.0, pain_relief + 30.0)
 		_recalculate_pain()
 		return true
+	if treatment == "antidepressant":
+		effects["antidepressant"] = float(effects.get("antidepressant", 0.0)) + 8.0 * 3600.0
+		return true
+	if treatment == "beta_blocker":
+		effects["beta_blocker"] = 8.0 * 3600.0
+		return true
+	if treatment == "caffeine":
+		if effect_active("caffeine"):
+			effects["nausea"] = 4.0 * 3600.0
+			effects["anxiety"] = 4.0 * 3600.0
+			return true
+		survival.fatigue = maxf(0.0, survival.fatigue - (20.0 if effect_active("caffeine_crash") else 40.0))
+		effects["caffeine"] = 4.0 * 3600.0
+		return true
+	if treatment == "sleeping_pill":
+		if effect_active("sleeping_pill"):
+			effects["sleeping_pill_overdose"] = 8.0 * 3600.0
+			effects["nausea"] = 8.0 * 3600.0
+			effects["dizziness"] = 8.0 * 3600.0
+			effects["weak_breathing"] = 8.0 * 3600.0
+			effects["limb_weakness"] = 8.0 * 3600.0
+			effects["muscle_soreness"] = 8.0 * 3600.0
+			return true
+		effects["sleeping_pill"] = 8.0 * 3600.0
+		return true
 	var wound := wound_by_id(wound_id)
 	if wound.is_empty(): return false
 	match treatment:
-		"bandage": wound["bandaged"] = true; wound["bleeding"] = 0.0
+		"bandage":
+			wound["bandaged"] = true
+			wound["bandage_bleed_rate"] = float(wound["bleeding"])
+			wound["bandage_absorption"] = 0.0
+			wound["bandage_disinfected"] = false
+			wound["bandage_dirty"] = false
+			wound["bleeding"] = 0.0
 		"disinfectant": wound["cleaned"] = true; wound["infection"] = maxf(0.0, float(wound["infection"]) - 20.0)
 		"antibiotic": wound["infection"] = maxf(0.0, float(wound["infection"]) - 35.0)
 		"splint":
@@ -168,6 +238,17 @@ func treat_wound(wound_id: String, treatment: String) -> bool:
 		"burn_dressing":
 			if wound["type"] != "Burn": return false
 			wound["burn_dressed"] = true
+		"remove_glass":
+			if wound.get("foreign_body", "none") != "glass": return false
+			wound["foreign_body"] = "none"
+			wound["requires_sutures"] = true
+		"remove_bullet":
+			if wound.get("foreign_body", "none") != "bullet": return false
+			wound["foreign_body"] = "none"
+			wound["requires_sutures"] = true
+		"suture":
+			if not bool(wound.get("requires_sutures", false)) or wound.get("foreign_body", "none") != "none": return false
+			wound["requires_sutures"] = false
 		_: return false
 	wound["wound_infection"] = float(wound["infection"]) > 0.0
 	return true
@@ -176,6 +257,16 @@ func wound_by_id(id: String) -> Dictionary:
 	for wound in wounds:
 		if wound.get("id", "") == id: return wound
 	return {}
+
+## Foreign-body wounds are authored by future firearm and glass hazards. Keeping
+## the state here lets those systems use the same treatment sequence.
+func add_foreign_body_wound(body: String, location: String, severity: float, foreign_body: String) -> Dictionary:
+	if foreign_body not in ["glass", "bullet"]: return {}
+	var wound := add_wound(body, location, severity)
+	if wound.is_empty(): return {}
+	wound["foreign_body"] = foreign_body
+	wound["requires_sutures"] = true
+	return wound
 
 func movement_multiplier() -> float:
 	var carry := 1.0 / (1.0 + 0.8 * inventory.encumbrance()) if inventory != null else 1.0
@@ -216,7 +307,12 @@ func late_virus_symptoms() -> bool:
 	return zombie_virus_exposure and zombie_virus_deadline > 0.0 and GameTime.elapsed_game_seconds >= zombie_virus_deadline - symptom_window
 
 func symptom_text() -> String:
-	return "Fever · weakness" if late_virus_symptoms() else ""
+	var symptoms: Array[String] = []
+	if late_virus_symptoms(): symptoms.append("Fever · weakness")
+	if effect_active("weak_breathing"): symptoms.append("Weak breathing")
+	if effect_active("limb_weakness"): symptoms.append("Limb weakness")
+	if effect_active("muscle_soreness"): symptoms.append("Muscle soreness")
+	return " · ".join(symptoms)
 
 func should_reanimate() -> bool:
 	return is_dead() and zombie_virus_exposure and not head_destroyed
@@ -280,13 +376,18 @@ func _normalize_wound(wound: Dictionary) -> void:
 	wound["infection"] = 1.0 if old_infection is bool and old_infection else (0.0 if old_infection is bool else clampf(float(old_infection), 0.0, 100.0))
 	wound["wound_infection"] = float(wound["infection"]) > 0.0
 	if not wound.has("bleeding"): wound["bleeding"] = float(wound["severity"]) * float(StatusConfig.BLEEDING_FACTOR.get(wound.get("type", "Scratch"), 0.25))
-	for key in ["bandaged", "cleaned", "splinted", "burn_dressed", "healing"]:
+	for key in ["bandaged", "cleaned", "splinted", "burn_dressed", "healing", "requires_sutures", "bandage_disinfected", "bandage_dirty"]:
 		if not wound.has(key): wound[key] = false
+	for key in ["bandage_absorption", "bandage_bleed_rate"]:
+		if not wound.has(key): wound[key] = 0.0
+	if not wound.has("bandage_item_id"): wound["bandage_item_id"] = ""
+	if not wound.has("foreign_body"): wound["foreign_body"] = "none"
 
 func to_save_data() -> Dictionary:
 	return {"body_health": body_health.duplicate(true), "wounds": wounds.duplicate(true), "pain": pain,
 		"pain_relief": pain_relief, "panic": panic, "stress": stress, "boredom": boredom,
-		"unhappiness": unhappiness, "core_temperature": core_temperature,
+		"unhappiness": unhappiness, "anxiety": anxiety, "nausea": nausea, "dizziness": dizziness,
+		"effects": effects.duplicate(true), "core_temperature": core_temperature,
 		"virus_infected": zombie_virus_exposure, "virus_deadline": zombie_virus_deadline,
 		"head_destroyed": head_destroyed}
 
@@ -294,7 +395,8 @@ func load_save_data(data: Dictionary) -> void:
 	body_health = data.get("body_health", body_health).duplicate(true)
 	wounds.assign(data.get("wounds", []))
 	for wound in wounds: _normalize_wound(wound)
-	for key in ["pain", "pain_relief", "panic", "stress", "boredom", "unhappiness", "core_temperature"]: set(key, data.get(key, get(key)))
+	for key in ["pain", "pain_relief", "panic", "stress", "boredom", "unhappiness", "anxiety", "nausea", "dizziness", "core_temperature"]: set(key, data.get(key, get(key)))
+	effects = data.get("effects", {}).duplicate(true)
 	zombie_virus_exposure = data.get("virus_infected", false)
 	zombie_virus_deadline = data.get("virus_deadline", -1.0)
 	head_destroyed = data.get("head_destroyed", false)
@@ -306,10 +408,11 @@ static func valid_status_data(data: Variant) -> bool:
 	for region in BODY_REGIONS:
 		var value: Variant = data["body_health"].get(region)
 		if not (value is float or value is int) or float(value) < 0.0 or float(value) > 100.0: return false
-	for key in ["pain", "pain_relief", "panic", "stress", "boredom", "unhappiness"]:
+	for key in ["pain", "pain_relief", "panic", "stress", "boredom", "unhappiness", "anxiety", "nausea", "dizziness"]:
 		var value: Variant = data.get(key)
 		if not (value is float or value is int) or float(value) < 0.0 or float(value) > 100.0: return false
 	if not (data.get("core_temperature") is float or data.get("core_temperature") is int): return false
+	if not data.get("effects", {}) is Dictionary: return false
 	if not data.get("virus_infected") is bool or not data.get("head_destroyed") is bool: return false
 	if not (data.get("virus_deadline") is float or data.get("virus_deadline") is int): return false
 	for wound in data["wounds"]:

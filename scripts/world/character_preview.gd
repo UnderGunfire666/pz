@@ -11,6 +11,8 @@ var render_cpu: Array[float] = []
 var render_gpu: Array[float] = []
 var last_frame_usec := 0
 var benchmark := false
+var outfit_index := 0
+var stripped := false
 
 func _ready() -> void:
 	benchmark = "--benchmark" in OS.get_cmdline_user_args()
@@ -30,7 +32,7 @@ func _ready() -> void:
 	camera = Camera3D.new()
 	camera.fov = 43.0
 	add_child(camera)
-	camera.position = Vector3(0, 1.5, -4.3)
+	camera.position = Vector3(0, 1.5, -6.4)
 	camera.look_at(Vector3(0, 0.95, 0))
 	camera.current = true
 	var floor_mesh := MeshInstance3D.new()
@@ -45,27 +47,38 @@ func _ready() -> void:
 		camera.position = Vector3(0, 8, -14)
 		camera.look_at(Vector3(0, 0.8, 5))
 		for index in 64:
-			add_model(ActorBody.ZOMBIE, Vector3((index % 8 - 3.5) * 0.9, 0, index / 8 * 1.0), "Zombie")
+			add_model(ActorBody.ZOMBIE if index % 3 == 0 else ActorBody.PLAYER, Vector3((index % 8 - 3.5) * 0.9, 0, index / 8 * 1.0), "Zombie" if index % 3 == 0 else ("Female NPC" if index % 3 == 1 else "Player"))
 	else:
-		add_model(ActorBody.PLAYER, Vector3(-0.65, 0, 0), "Player")
-		add_model(ActorBody.ZOMBIE, Vector3(0.65, 0, 0), "Zombie")
+		add_model(ActorBody.PLAYER, Vector3(-1.35, 0, 0), "Player")
+		add_model(ActorBody.PLAYER, Vector3(0, 0, 0), "Female NPC")
+		add_model(ActorBody.ZOMBIE, Vector3(1.35, 0, 0), "Zombie")
+	for argument: String in OS.get_cmdline_user_args():
+		if argument.begins_with("--close="):
+			var x := float(argument.trim_prefix("--close="))
+			camera.position = Vector3(x, 1.1, -3.1)
+			camera.look_at(Vector3(x, 0.95, 0))
 	label = Label.new()
 	label.position = Vector2(20, 20)
-	label.text = "Mixamo animation preview | B: hit volumes | Click: body region\nPlayer: walk (procedural arms) | Zombie: attack"
+	label.text = "Clothing preview | C: next outfit | R: remove / wear | B: hit volumes\nLeft: original zombie · centre: female NPC · right: male player | Click: body region"
 	add_child(label)
 
 func add_model(profile: CharacterBodyProfile, at: Vector3, title: String) -> void:
 	var model := MixamoCharacterVisual.new()
 	model.position = at
 	add_child(model)
-	model.setup(profile)
-	actors.append({"position": at, "profile": profile, "name": title, "model": model})
+	var appearance := CharacterAppearance.new()
+	if title == "Female NPC":
+		appearance.gender = "female"
+		appearance.hair = "Hair_Long"
+	var inventory := InventoryGrid.new()
+	inventory.wearer_gender = appearance.gender
+	var rng := RandomNumberGenerator.new()
+	rng.seed = actors.size() + 19
+	ClothingCatalog.dress(inventory, rng, ["CasualWear", "Medical Lite", "Park Ranger"][actors.size() % 3])
+	model.setup(profile if title == "Zombie" else appearance.model_profile())
+	model.bind_clothing(inventory, appearance, title == "Zombie")
+	actors.append({"position": at, "profile": profile, "name": title, "model": model, "inventory": inventory})
 	if benchmark: return
-	var caption := Label3D.new()
-	caption.text = title
-	caption.position = at + Vector3(0, 1.98, 0)
-	caption.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	add_child(caption)
 	for region: String in profile.regions:
 		var bounds: AABB = profile.regions[region]
 		var box := MeshInstance3D.new()
@@ -83,6 +96,20 @@ func add_model(profile: CharacterBodyProfile, at: Vector3, title: String) -> voi
 		boxes.append(box)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode in [KEY_C, KEY_R]:
+		if event.keycode == KEY_C:
+			outfit_index = (outfit_index + 1) % 3
+			stripped = false
+		else: stripped = not stripped
+		for index in actors.size():
+			var inventory: InventoryGrid = actors[index]["inventory"]
+			for slot: String in InventoryGrid.ROOTS: inventory.contents(slot).clear()
+			inventory.revision += 1
+			if not stripped:
+				var rng := RandomNumberGenerator.new()
+				rng.seed = index + 19
+				ClothingCatalog.dress(inventory, rng, ["CasualWear", "Medical Lite", "Park Ranger"][(index + outfit_index) % 3])
+			actors[index]["model"].clothing_visual.refresh()
 	if event is InputEventKey and event.pressed and event.keycode == KEY_B:
 		for box in boxes: box.visible = not box.visible
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -99,10 +126,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		label.text = "B: hit volumes | Click: body region\n" + selected
 
 func _process(delta: float) -> void:
-	if not benchmark:
-		for actor: Dictionary in actors:
-			var model := actor["model"] as MixamoCharacterVisual
-			model.advance_animation(delta, "walk" if actor["name"] == "Player" else "attack")
+	for actor: Dictionary in actors:
+		var model := actor["model"] as MixamoCharacterVisual
+		if "--static" in OS.get_cmdline_user_args():
+			model.animation_player.stop()
+			model.skeleton.reset_bone_poses()
+		else:
+			var animation_delta := 1.0 / 60.0 if "--capture" in OS.get_cmdline_user_args() else delta
+			var interval := MixamoCharacterVisual.animation_interval_for_distance(camera.global_position.distance_to(model.global_position)) if benchmark else 0.0
+			model.advance_animation_throttled(animation_delta, "attack" if actor["name"] == "Zombie" else "walk", 1.0, interval)
 	frames += 1
 	var now := Time.get_ticks_usec()
 	if benchmark and frames > 30:
