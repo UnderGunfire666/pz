@@ -186,7 +186,7 @@ func refresh(game: MVPGameRoot) -> void:
 		int(round(game.player_state.health)), int(needs.hunger), int(needs.thirst), int(needs.fatigue), int(needs.stamina),
 		int(round(game.player_state.pain)), int(round(game.player_state.panic)), int(round(game.player_state.stress)),
 		int(round(game.player_state.boredom)), int(round(game.player_state.unhappiness)),
-		int(round(game.player_state.core_temperature * 100.0)), game.inventory.revision,
+		int(round(game.player_state.core_temperature * 100.0)), int(round(StatusConfig.AMBIENT_TEMPERATURE * 10.0)), game.inventory.revision,
 		game.milestones, game.notification, GameTime.speed_mode, game.player_state.is_dead()])
 	if signature == _last_presentation_signature:
 		return
@@ -201,7 +201,8 @@ func refresh(game: MVPGameRoot) -> void:
 		var link: StairLink = game.world_map.stairs[game.player.stair_id]
 		stair_text = " · Stairs %d↔%d" % [link.from_floor + 1, link.to_floor + 1]
 	var display_floor := game.world_map.display_floor_at(game.player.logical_position, game.player.floor_level, game.player.stair_id)
-	floor_label.text = "%s · %s · Floor %d%s" % [GameTime.formatted_time(), place, display_floor + 1, stair_text]
+	floor_label.text = "%s · %s · Floor %d · Ambient %.1f°C%s" % [
+		GameTime.formatted_time(), place, display_floor + 1, StatusConfig.AMBIENT_TEMPERATURE, stair_text]
 	status_label.text = "Health %d · Hunger %d · Thirst %d · Fatigue %d · Stamina %d   |   %.1f / %.1f kg" % [
 		game.player_state.health, needs.hunger, needs.thirst, needs.fatigue, needs.stamina,
 		weight, game.inventory.absolute_limit]

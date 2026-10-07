@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://docxh548ekp4f"
-path="res://.godot/imported/ThighHighs_Socks.gltf-8c20f7c8d48f9e88847d3b0ade31fe03.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/CasualWear/ThighHighs_Socks.gltf"
-dest_files=["res://.godot/imported/ThighHighs_Socks.gltf-8c20f7c8d48f9e88847d3b0ade31fe03.scn"]
 
 [params]
 

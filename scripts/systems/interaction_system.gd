@@ -74,6 +74,14 @@ func _build_demo_interactions() -> void:
 	(points[7]["container"] as ContainerData).claimed_by = "neighbour"
 	points.append(_temperature_container("refrigerator", "Refrigerator", Vector2(4.5, 3.5), 0, 4.0))
 	points.append(_temperature_container("freezer", "Freezer", Vector2(3.5, 3.5), 0, -18.0))
+	# Temperature starts at the surrounding ambient value when the item is created,
+	# then approaches the appliance target through InventoryGrid's item simulation.
+	var refrigerator: ContainerData = points[points.size() - 2]["container"]
+	refrigerator.contents.append_array([ItemStack.new(foods["milk"]), ItemStack.new(foods["egg"]),
+		ItemStack.new(foods["apple"]), ItemStack.new(liquids["juice"])])
+	var freezer: ContainerData = points.back()["container"]
+	freezer.contents.append_array([ItemStack.new(foods["chicken"]), ItemStack.new(foods["cod"]),
+		ItemStack.new(foods["ice_cream"]), ItemStack.new(foods["ice_pop"])])
 	var bandage: ItemDefinition = medical["bandage"]
 	var disinfectant: ItemDefinition = medical["disinfectant"]
 	var antibiotics: ItemDefinition = medical["antibiotics"]

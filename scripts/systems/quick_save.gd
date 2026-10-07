@@ -308,6 +308,8 @@ static func restore(game: MVPGameRoot, data: Dictionary) -> void:
 	game.world_map.restore_barrier_states(data["barriers"])
 	GameTime.elapsed_game_seconds = data["clock"]
 	GameTime.last_advanced_game_seconds = 0.0
+	StatusConfig.AMBIENT_TEMPERATURE = StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds)
+	game.inventory.reset_item_state_clock()
 	_restore_actor(game.player, data["player"])
 	game.player.facing_direction = data["facing"]
 	game.player.look_pitch = float(data.get("look_pitch", 0.0))

@@ -50,3 +50,10 @@ static func severity_tier(value: float, inverse: bool = false) -> int:
 	if severity < STATUS_THRESHOLDS[1]: return 2
 	if severity < STATUS_THRESHOLDS[2]: return 3
 	return 4
+
+## Warming retains the agreed 1 C/hour at 0 C, +/-2% per ambient degree.
+## Cooling is a separate process: colder surroundings must not slow cooling.
+static func item_temperature_after(current: float, environment: float, seconds: float) -> float:
+	if seconds <= 0.0: return current
+	var rate := maxf(0.0, 1.0 + environment * 0.02) if current < environment else 1.0 + maxf(0.0, -environment) * 0.02
+	return move_toward(current, environment, rate * seconds / 3600.0)

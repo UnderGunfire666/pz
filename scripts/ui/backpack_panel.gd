@@ -223,6 +223,8 @@ func _rebuild(side: int) -> void:
 	elif game.inventory.world.has(destination):
 		var cap: float = game.inventory.world[destination].capacity
 		headers[side].text = "%.1f / %s cm³" % [volume, "%.0f" % cap if is_finite(cap) else "unlimited"]
+		var container: ContainerData = game.inventory.world[destination]
+		headers[side].text += " · Environment %.1f°C" % container.effective_temperature(StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds))
 	else:
 		var found := game.inventory.find_unit(destination)
 		if not found.is_empty():
@@ -417,7 +419,9 @@ func tooltip_text(data: Dictionary) -> String:
 	if stack.definition.freshness_lifetime_days > 0.0:
 		var freshness := float(unit.get("freshness", 100.0))
 		var freshness_label := "Fresh" if freshness >= 50.0 else ("Stale" if freshness > 0.0 else "Spoiled")
-		text += "\nFreshness: %.0f (%s) · %.1f°C" % [freshness, freshness_label, float(unit.get("temperature", 20.0))]
+		text += "\nFreshness: %.0f (%s)" % [freshness, freshness_label]
+	if "food" in stack.definition.tags or "water" in stack.definition.tags or "liquid" in stack.definition.tags:
+		text += "\nTemperature: %.2f°C" % float(unit.get("temperature", StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds)))
 	if stack.definition.cooking_state_supported: text += "\nCooking: %s" % String(unit.get("cooking_state", "raw")).capitalize()
 	if stack.definition.requires_opening: text += "\n%s" % ("Opened" if unit.get("opened", false) else "Sealed")
 	if stack.definition.liquid_capacity_ml > 0.0: text += "\nLiquid: %.0f / %.0f mL" % [float(unit.get("liquid_ml", 0.0)), stack.definition.liquid_capacity_ml]

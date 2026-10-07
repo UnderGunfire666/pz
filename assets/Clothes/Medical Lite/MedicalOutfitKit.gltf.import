@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://mpj4kbxmsfbp"
-path="res://.godot/imported/MedicalOutfitKit.gltf-8c4aca78187b00069de395c9b4db5c38.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/Medical Lite/MedicalOutfitKit.gltf"
-dest_files=["res://.godot/imported/MedicalOutfitKit.gltf-8c4aca78187b00069de395c9b4db5c38.scn"]
 
 [params]
 

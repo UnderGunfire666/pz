@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://ck6exc8v7k1oh"
-path="res://.godot/imported/F_UnderwearFull.gltf-56537ec2989054edac64c77b117c1a8d.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/Underwear 2025/2025 Version/Female/F_UnderwearFull.gltf"
-dest_files=["res://.godot/imported/F_UnderwearFull.gltf-56537ec2989054edac64c77b117c1a8d.scn"]
 
 [params]
 

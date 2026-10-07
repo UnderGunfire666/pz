@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://c2uo2fbf3qb23"
-path="res://.godot/imported/AnkleSocks_Socks.gltf-8350aade6be38d61adc5f5ce728f3760.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/CasualWear/AnkleSocks_Socks.gltf"
-dest_files=["res://.godot/imported/AnkleSocks_Socks.gltf-8350aade6be38d61adc5f5ce728f3760.scn"]
 
 [params]
 

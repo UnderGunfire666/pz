@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://h377jt2tmeaw"
-path="res://.godot/imported/ParkRangerFullOutfitKit.gltf-1ef3c6795162c4e008e2e4c83fb0bead.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/Law Enforcement Lite/Park Ranger/ParkRangerFullOutfitKit.gltf"
-dest_files=["res://.godot/imported/ParkRangerFullOutfitKit.gltf-1ef3c6795162c4e008e2e4c83fb0bead.scn"]
 
 [params]
 

@@ -319,17 +319,23 @@ func sort_items() -> void:
 func advance_item_states(game_seconds: float) -> void:
 	if game_seconds <= 0.0: return
 	_item_state_accumulator += game_seconds
-	if _item_state_accumulator < 60.0: return
-	var elapsed := _item_state_accumulator
+	var changed := false
+	while _item_state_accumulator >= 60.0:
+		_item_state_accumulator -= 60.0
+		var tick_time := GameTime.elapsed_game_seconds - _item_state_accumulator
+		changed = _advance_item_minute(StatusConfig.ambient_temperature_at(tick_time)) or changed
+	if changed: revision += 1
+
+func reset_item_state_clock() -> void:
 	_item_state_accumulator = 0.0
-	var ambient := StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds)
+
+func _advance_item_minute(ambient: float) -> bool:
 	var changed := false
 	for root in ROOTS:
-		changed = _advance_stack_states(contents(root), elapsed, ambient) or changed
+		changed = _advance_stack_states(contents(root), 60.0, ambient) or changed
 	for container: ContainerData in world.values():
-		var target := container.temperature_target if is_finite(container.temperature_target) else ambient
-		changed = _advance_stack_states(container.contents, elapsed, target) or changed
-	if changed: revision += 1
+		changed = _advance_stack_states(container.contents, 60.0, container.effective_temperature(ambient)) or changed
+	return changed
 
 func _advance_stack_states(items: Array, game_seconds: float, environment_temperature: float) -> bool:
 	var changed := false
@@ -338,9 +344,8 @@ func _advance_stack_states(items: Array, game_seconds: float, environment_temper
 			var item := stack.definition
 			if "food" in item.tags or "water" in item.tags or "liquid" in item.tags:
 				var previous_temperature := float(unit.get("temperature", environment_temperature))
-				var rate := maxf(0.0, 1.0 + environment_temperature * 0.02)
-				var temperature := move_toward(previous_temperature, environment_temperature, rate * game_seconds / 3600.0)
-				if not is_equal_approx(temperature, previous_temperature):
+				var temperature := StatusConfig.item_temperature_after(previous_temperature, environment_temperature, game_seconds)
+				if temperature != previous_temperature:
 					unit["temperature"] = temperature
 					changed = true
 				if item.freshness_lifetime_days > 0.0 and (not item.requires_opening or bool(unit.get("opened", false))):

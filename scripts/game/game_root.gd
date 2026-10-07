@@ -49,6 +49,7 @@ func _ready() -> void:
 	print("[Startup] Engine start to game _ready: %.2f ms" % (float(_startup_started_usec) / 1000.0))
 	GameTime.elapsed_game_seconds = 8.0 * 3600.0
 	GameTime.last_advanced_game_seconds = 0.0
+	StatusConfig.AMBIENT_TEMPERATURE = StatusConfig.ambient_temperature_at(GameTime.elapsed_game_seconds)
 	GameTime.set_speed(GameTime.SpeedMode.NORMAL)
 	world_map = WorldMap.new()
 	for argument in OS.get_cmdline_user_args():

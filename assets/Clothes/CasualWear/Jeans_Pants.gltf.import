@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://c31w8ciou4wdp"
-path="res://.godot/imported/Jeans_Pants.gltf-c6c6652411f9878007ecbaec5ad68c5a.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/CasualWear/Jeans_Pants.gltf"
-dest_files=["res://.godot/imported/Jeans_Pants.gltf-c6c6652411f9878007ecbaec5ad68c5a.scn"]
 
 [params]
 

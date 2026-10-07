@@ -4,12 +4,11 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://05o22nhsmv4f"
-path="res://.godot/imported/HearBonnet_ACC.fbx.gltf-f36aedea7b884d1390eea99374b25c48.scn"
+valid=false
 
 [deps]
 
 source_file="res://assets/Clothes/Law Enforcement Lite/Park Ranger/HearBonnet_ACC.fbx.gltf"
-dest_files=["res://.godot/imported/HearBonnet_ACC.fbx.gltf-f36aedea7b884d1390eea99374b25c48.scn"]
 
 [params]
 
